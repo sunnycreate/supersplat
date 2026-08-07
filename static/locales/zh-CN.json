@@ -326,6 +326,7 @@
     "tooltip.bottom-toolbar.rotate": "旋转",
     "tooltip.bottom-toolbar.scale": "缩放",
     "tooltip.bottom-toolbar.measure": "测量",
+    "tooltip.bottom-toolbar.sample-point": "采样点标记",
     "tooltip.bottom-toolbar.orient": "调整方向",
     "tooltip.bottom-toolbar.local-space": "局部坐标系",
     "tooltip.bottom-toolbar.reset-pivot": "重置枢轴（Shift：至中心）",

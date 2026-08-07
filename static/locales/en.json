@@ -326,6 +326,7 @@
     "tooltip.bottom-toolbar.rotate": "Rotate",
     "tooltip.bottom-toolbar.scale": "Scale",
     "tooltip.bottom-toolbar.measure": "Measure",
+    "tooltip.bottom-toolbar.sample-point": "Sample Point",
     "tooltip.bottom-toolbar.orient": "Orient",
     "tooltip.bottom-toolbar.local-space": "Use Local Orientation",
     "tooltip.bottom-toolbar.reset-pivot": "Reset Pivot (Shift: to center)",
