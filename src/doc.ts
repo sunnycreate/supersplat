@@ -126,6 +126,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 console.error('this should never fire');
             }
 
+            // restore georeference metadata (if present in the document)
+            scene.geoMeta = document.geoMeta ?? null;
+
             events.invoke('docDeserialize.timeline', document.timeline);
             events.invoke('docDeserialize.poseSets', document.poseSets, document.camera?.fov);
             events.invoke('docDeserialize.view', document.view);
@@ -168,7 +171,8 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 view: events.invoke('docSerialize.view'),
                 poseSets: events.invoke('docSerialize.poseSets'),
                 timeline: events.invoke('docSerialize.timeline'),
-                splats: splats.map(s => s.docSerialize())
+                splats: splats.map(s => s.docSerialize()),
+                geoMeta: scene.geoMeta
             };
 
             const serializeSettings = {

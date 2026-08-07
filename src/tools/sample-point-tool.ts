@@ -1,8 +1,11 @@
-import { Color, Entity, StandardMaterial, TranslateGizmo, Vec3 } from 'playcanvas';
+import { Color, Entity, Mat4, StandardMaterial, TranslateGizmo, Vec3 } from 'playcanvas';
+import proj4 from 'proj4';
 
 import { EditOp } from '../edit-ops';
+import { ElementType } from '../element';
 import { Events } from '../events';
 import { Scene } from '../scene';
+import { Splat } from '../splat';
 
 // pointer movement below this many pixels still counts as a click
 const CLICK_TOLERANCE = 4;
@@ -260,6 +263,56 @@ class SamplePointTool {
         // edit.add calls op.do() which adds the marker to the scene
         this.events.fire('edit.add', op);
         this.scene.forceRender = true;
+
+        // compute and log WGS84 coordinates if geo metadata is available
+        const wgs84 = this.sceneToWgs84(position);
+        if (wgs84) {
+            // eslint-disable-next-line no-console
+            console.log(
+                `[SamplePoint] WGS84: lat=${wgs84.lat.toFixed(8)}, lon=${wgs84.lon.toFixed(8)}, alt=${wgs84.alt.toFixed(3)}`
+            );
+        } else {
+            // eslint-disable-next-line no-console
+            console.log(`[SamplePoint] scene pos: (${position.x.toFixed(3)}, ${position.y.toFixed(3)}, ${position.z.toFixed(3)}) — no geo metadata`);
+        }
+    }
+
+    // convert a scene-space position to WGS84 (lat/lon/alt) using LCC geo metadata.
+    // transform chain: scenePos → (inverse splat worldTransform) → LCC local pos
+    //                  → (* scale + shift + offset) → EPSG projected pos
+    //                  → proj4 → WGS84
+    private sceneToWgs84(scenePos: Vec3): { lat: number; lon: number; alt: number } | null {
+        const { scene } = this;
+        if (!scene.geoMeta || scene.geoMeta.epsg === 0) {
+            return null;
+        }
+
+        // get the first splat's entity to recover the LCC→scene rotation
+        const splats = scene.getElementsByType(ElementType.splat);
+        if (splats.length === 0) {
+            return null;
+        }
+        const splatEntity = (splats[0] as Splat).entity;
+
+        // inverse world transform: scene → LCC local coordinates
+        const invTransform = new Mat4().invert(splatEntity.getWorldTransform());
+        const lccLocal = new Vec3();
+        invTransform.transformPoint(scenePos, lccLocal);
+
+        // apply LCC geo transform: projected = local * scale + shift + offset
+        const { epsg, offset, shift, scale } = scene.geoMeta;
+        const projX = lccLocal.x * scale[0] + shift[0] + offset[0];
+        const projY = lccLocal.y * scale[1] + shift[1] + offset[1];
+        const projZ = lccLocal.z * scale[2] + shift[2] + offset[2];
+
+        // convert from EPSG projection to WGS84
+        const [lon, lat] = proj4(
+            `EPSG:${epsg}`,
+            'EPSG:4326',
+            [projX, projY]
+        );
+
+        return { lat, lon, alt: projZ };
     }
 
     private selectMarker(marker: Entity) {

@@ -29,6 +29,14 @@ import { Splat } from './splat';
 import { SplatOverlay } from './splat-overlay';
 import { Underlay } from './underlay';
 
+// georeference metadata extracted from LCC meta.lcc
+export interface GeoMeta {
+    epsg: number;            // EPSG code (e.g. 32651 = UTM Zone 51N); 0 = undefined
+    offset: [number, number, number];
+    shift: [number, number, number];
+    scale: [number, number, number];
+}
+
 // sort meshInstances by the aabb corner furthest from the camera
 const corner = new Vec3();
 const specialSort = (instances: MeshInstance[], numInstances: number, cameraPos: Vec3, cameraDir: Vec3) => {
@@ -85,6 +93,10 @@ class Scene {
 
     lockedRenderMode = false;
     lockedRender = false;
+
+    // georeference metadata from LCC meta.lcc (offset/epsg/shift/scale).
+    // null when the loaded model has no geo reference (epsg = 0).
+    geoMeta: GeoMeta | null = null;
 
     canvasResize: {width: number; height: number} | null = null;
     targetSize = {
@@ -259,6 +271,7 @@ class Scene {
             this.remove(splat);
             (splat as Splat).destroy();
         });
+        this.geoMeta = null;
     }
 
     // add a scene element

@@ -305,6 +305,39 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 // user cancelled the load
                 return null;
             }
+
+            // extract georeference metadata from LCC meta.lcc (if present)
+            const lccFile = files.find(f => {
+                const lower = f.filename.toLowerCase();
+                return lower.endsWith('.lcc') && !lower.endsWith('.lcc2');
+            });
+            if (lccFile) {
+                try {
+                    let text: string;
+                    if (lccFile.contents) {
+                        text = await lccFile.contents.text();
+                    } else if (baseUrl) {
+                        const response = await fetch(new URL(lccFile.filename, baseUrl).href);
+                        text = await response.text();
+                    } else {
+                        text = '';
+                    }
+                    if (text) {
+                        const lccJson = JSON.parse(text);
+                        if (lccJson.epsg && lccJson.epsg !== 0) {
+                            scene.geoMeta = {
+                                epsg: lccJson.epsg,
+                                offset: lccJson.offset ?? [0, 0, 0],
+                                shift: lccJson.shift ?? [0, 0, 0],
+                                scale: lccJson.scale ?? [1, 1, 1]
+                            };
+                        }
+                    }
+                } catch {
+                    // meta.lcc parse failed — continue without geo metadata
+                }
+            }
+
             await scene.add(model);
             return model;
         } catch (error) {
