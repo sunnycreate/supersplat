@@ -272,6 +272,34 @@ const main = async () => {
     registerRenderEvents(scene, events);
     initFileHandler(scene, events, editorUI.appContainer.dom);
 
+    // ── sample point panel: position below scene panel ──
+    const updateSamplePanelPos = () => {
+        editorUI.samplePointPanel.updatePosition(editorUI.scenePanelDom);
+    };
+    updateSamplePanelPos();
+    new ResizeObserver(updateSamplePanelPos).observe(editorUI.scenePanelDom);
+    events.on('scene.elementAdded', updateSamplePanelPos);
+    events.on('scene.elementRemoved', updateSamplePanelPos);
+    events.on('scene.clear', updateSamplePanelPos);
+
+    // ── hide/show bottom toolbar when adding sample points ──
+    const bottomToolbarDom = document.getElementById('bottom-toolbar');
+    events.on('bottomToolbar.hide', () => {
+        if (bottomToolbarDom) {
+            bottomToolbarDom.style.display = 'none';
+        }
+    });
+    events.on('bottomToolbar.show', () => {
+        if (bottomToolbarDom) {
+            bottomToolbarDom.style.display = '';
+        }
+    });
+
+    // ── force render when sample point markers change ──
+    events.on('samplePoint.forceRender', () => {
+        scene.forceRender = true;
+    });
+
     // apply stored user preferences and start capturing changes to them.
     // registered after the boot-time initialization events above so they are
     // never captured as user changes.

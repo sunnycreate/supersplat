@@ -17,6 +17,7 @@ import { Popup, ShowOptions } from './popup';
 import { Progress } from './progress';
 import { PublishSettingsDialog } from './publish-settings-dialog';
 import { RightToolbar } from './right-toolbar';
+import { SamplePointPanel } from './sample-point-panel';
 import { ScenePanel } from './scene-panel';
 import { SettingsPanel } from './settings-panel';
 import { ShortcutsPopup } from './shortcuts-popup';
@@ -39,6 +40,8 @@ class EditorUI {
     canvas: HTMLCanvasElement;
     popup: Popup;
     tooltips: Tooltips;
+    samplePointPanel: SamplePointPanel;
+    scenePanelDom: HTMLElement;
 
     constructor(events: Events) {
         // favicon
@@ -93,6 +96,7 @@ class EditorUI {
 
         // bottom toolbar
         const scenePanel = new ScenePanel(events, tooltips);
+        const samplePointPanel = new SamplePointPanel(events, tooltips);
         const settingsPanel = new SettingsPanel(events, tooltips);
         const colorPanel = new ColorPanel(events, tooltips);
         const bottomToolbar = new BottomToolbar(events, tooltips);
@@ -101,11 +105,15 @@ class EditorUI {
         const menu = new Menu(events);
         const cameraInfoOverlay = new CameraInfoOverlay(events, tooltips);
 
+        this.samplePointPanel = samplePointPanel;
+        this.scenePanelDom = scenePanel.dom;
+
         canvasContainer.dom.appendChild(canvas);
         canvasContainer.append(appLabel);
         canvasContainer.append(cameraInfoOverlay);
         canvasContainer.append(toolsContainer);
         canvasContainer.append(scenePanel);
+        canvasContainer.append(samplePointPanel);
         canvasContainer.append(settingsPanel);
         canvasContainer.append(colorPanel);
         canvasContainer.append(bottomToolbar);

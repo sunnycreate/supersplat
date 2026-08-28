@@ -52,6 +52,7 @@
     "panel.scene.transform.position": "位置",
     "panel.scene.transform.rotation": "旋转",
     "panel.scene.transform.scale": "缩放",
+    "panel.samplePoint": "采样点及航线",
 
     "panel.colors": "颜色",
     "panel.colors.tint": "色调",
@@ -346,6 +347,10 @@
     "tooltip.scene.solo": "独显所选",
     "tooltip.scene.import": "导入场景",
     "tooltip.scene.new": "新建场景",
+
+    "tooltip.samplePoint.addFolder": "新建文件夹",
+    "tooltip.samplePoint.addPoint": "新增采样点",
+    "tooltip.samplePoint.deleteFolder": "删除文件夹",
 
     "tooltip.status-bar.timeline": "切换时间线面板",
     "tooltip.status-bar.splat-data": "切换高斯点数据面板",

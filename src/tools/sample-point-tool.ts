@@ -133,7 +133,6 @@ class SamplePointTool {
         };
 
         const pointerdown = (e: PointerEvent) => {
-            console.log(e)
             if (!this.clicked && isPrimary(e)) {
                 this.clicked = true;
                 this.clickX = e.offsetX;
@@ -165,7 +164,6 @@ class SamplePointTool {
                     const x = this.clickX / this.canvasContainer.clientWidth;
                     const y = this.clickY / this.canvasContainer.clientHeight;
                     const result = await scene.camera.intersect(x, y);
-                    console.log('result camera intersect', result)
                     if (result) {
                         this.deselectMarker();
                         this.createMarker(result.position);
@@ -264,8 +262,16 @@ class SamplePointTool {
         this.events.fire('edit.add', op);
         this.scene.forceRender = true;
 
-        // compute and log WGS84 coordinates if geo metadata is available
+        // compute WGS84 coordinates if geo metadata is available
         const wgs84 = this.sceneToWgs84(position);
+
+        // notify listeners (e.g. sample point panel) that a marker was created
+        this.events.fire('samplePoint.created', {
+            position: position.clone(),
+            wgs84: wgs84 ? { ...wgs84 } : null,
+            markerEntity: marker
+        });
+
         if (wgs84) {
             // eslint-disable-next-line no-console
             console.log(

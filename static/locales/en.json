@@ -52,6 +52,7 @@
     "panel.scene.transform.position": "Position",
     "panel.scene.transform.rotation": "Rotation",
     "panel.scene.transform.scale": "Scale",
+    "panel.samplePoint": "Sample Points & Routes",
 
     "panel.colors": "Colors",
     "panel.colors.tint": "Tint",
@@ -346,6 +347,10 @@
     "tooltip.scene.solo": "Solo Selected",
     "tooltip.scene.import": "Import Scene",
     "tooltip.scene.new": "New Scene",
+
+    "tooltip.samplePoint.addFolder": "Add Folder",
+    "tooltip.samplePoint.addPoint": "Add Sample Point",
+    "tooltip.samplePoint.deleteFolder": "Delete Folder",
 
     "tooltip.status-bar.timeline": "Toggle Timeline Panel",
     "tooltip.status-bar.splat-data": "Toggle Splat Data Panel",
