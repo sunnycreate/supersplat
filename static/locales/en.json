@@ -351,6 +351,7 @@
     "tooltip.samplePoint.addFolder": "Add Folder",
     "tooltip.samplePoint.addPoint": "Add Sample Point",
     "tooltip.samplePoint.deleteFolder": "Delete Folder",
+    "tooltip.samplePoint.generateRoute": "Generate Waypoints & Route",
 
     "tooltip.status-bar.timeline": "Toggle Timeline Panel",
     "tooltip.status-bar.splat-data": "Toggle Splat Data Panel",

@@ -8,6 +8,7 @@ import { Tooltips } from './tooltips';
 import deleteSvg from './svg/delete.svg';
 import folderNewSvg from './svg/folder-new.svg';
 import folderSvg from './svg/folder.svg';
+import routeSvg from './svg/route.svg';
 import samplePointSvg from './svg/sample-point-small.svg';
 
 const createSvg = (svgString: string) => {
@@ -25,7 +26,15 @@ interface SamplePointData {
     id: string;
     name: string;
     position: Vec3;
+    normal: Vec3;
     wgs84: { lat: number; lon: number; alt: number } | null;
+    markerEntity: Entity;
+}
+
+interface WaypointData {
+    id: string;
+    name: string;
+    position: Vec3;
     markerEntity: Entity;
 }
 
@@ -34,7 +43,9 @@ interface SampleFolder {
     name: string;
     expanded: boolean;
     addingPoints: boolean;
+    routeActive: boolean;
     points: SamplePointData[];
+    waypoints: WaypointData[];
 }
 
 class SamplePointPanel extends Container {
@@ -45,7 +56,7 @@ class SamplePointPanel extends Container {
     private activeFolderId: string | null = null;
 
     private folderListContainer: Container;
-    private folderElements: Map<string, { header: Container; content: Container; items: Map<string, Container> }> = new Map();
+    private folderElements: Map<string, { header: Container; content: Container; items: Map<string, Container>; waypointSection: Container | null; waypointItems: Map<string, Container> }> = new Map();
 
     constructor(events: Events, tooltips: Tooltips, args = {}) {
         args = {
@@ -108,7 +119,7 @@ class SamplePointPanel extends Container {
         this.append(this.folderListContainer);
 
         // ── listen for sample point creation from the tool ──
-        events.on('samplePoint.created', (data: { position: Vec3; wgs84: { lat: number; lon: number; alt: number } | null; markerEntity: Entity }) => {
+        events.on('samplePoint.created', (data: { position: Vec3; normal: Vec3; wgs84: { lat: number; lon: number; alt: number } | null; markerEntity: Entity }) => {
             if (this.activeFolderId) {
                 this.addPointToFolder(this.activeFolderId, data);
             }
@@ -116,9 +127,22 @@ class SamplePointPanel extends Container {
 
         // ── listen for tool deactivation (e.g. user pressed Escape or switched tool) ──
         events.on('tool.activated', (toolName: string) => {
-            if (toolName !== 'samplePoint' && this.activeFolderId) {
-                this.stopAddingPoints();
+            if (toolName !== 'samplePoint') {
+                if (this.activeFolderId) {
+                    this.stopAddingPoints();
+                }
+                // exit route editing for any active route folder
+                for (const folder of this.folders) {
+                    if (folder.routeActive) {
+                        this.stopRouteEditing(folder.id);
+                    }
+                }
             }
+        });
+
+        // ── listen for generated waypoints from the tool ──
+        events.on('route.generated', (waypoints: { position: Vec3; markerEntity: Entity }[]) => {
+            this.addWaypointsToFolder(waypoints);
         });
     }
 
@@ -136,7 +160,9 @@ class SamplePointPanel extends Container {
             name: `Folder ${folderCounter}`,
             expanded: true,
             addingPoints: false,
-            points: []
+            routeActive: false,
+            points: [],
+            waypoints: []
         };
         this.folders.push(folder);
         this.renderFolder(folder);
@@ -175,6 +201,10 @@ class SamplePointPanel extends Container {
         const addPointBtn = new Container({ class: 'sample-folder-add-point' });
         addPointBtn.dom.appendChild(createSvg(samplePointSvg));
 
+        // generate route button
+        const routeBtn = new Container({ class: 'sample-folder-route' });
+        routeBtn.dom.appendChild(createSvg(routeSvg));
+
         // delete folder button
         const deleteBtn = new Container({ class: 'sample-folder-delete' });
         deleteBtn.dom.appendChild(createSvg(deleteSvg));
@@ -183,6 +213,7 @@ class SamplePointPanel extends Container {
         header.append(icon);
         header.append(name);
         header.append(addPointBtn);
+        header.append(routeBtn);
         header.append(deleteBtn);
 
         // folder content (point list)
@@ -193,7 +224,7 @@ class SamplePointPanel extends Container {
 
         this.folderListContainer.append(folderEl);
 
-        this.folderElements.set(folder.id, { header, content, items: new Map() });
+        this.folderElements.set(folder.id, { header, content, items: new Map(), waypointSection: null, waypointItems: new Map() });
 
         // ── event handlers ──
         toggle.on('click', () => {
@@ -214,7 +245,12 @@ class SamplePointPanel extends Container {
             this.deleteFolder(folder.id);
         });
 
+        routeBtn.on('click', () => {
+            this.toggleRouteMode(folder.id);
+        });
+
         this.tooltips.register(addPointBtn, () => i18n.t('tooltip.samplePoint.addPoint'), 'left');
+        this.tooltips.register(routeBtn, () => i18n.t('tooltip.samplePoint.generateRoute'), 'left');
         this.tooltips.register(deleteBtn, () => i18n.t('tooltip.samplePoint.deleteFolder'), 'left');
     }
 
@@ -225,6 +261,14 @@ class SamplePointPanel extends Container {
         // stop adding if this folder was active
         if (this.activeFolderId === folderId) {
             this.stopAddingPoints();
+        }
+
+        // stop route editing and clear route if active
+        if (folder.routeActive) {
+            this.stopRouteEditing(folderId);
+        }
+        if (folder.waypoints.length > 0) {
+            this.events.fire('route.clear');
         }
 
         // destroy all marker entities
@@ -297,7 +341,7 @@ class SamplePointPanel extends Container {
     }
 
     // ── point management ──
-    private addPointToFolder(folderId: string, data: { position: Vec3; wgs84: { lat: number; lon: number; alt: number } | null; markerEntity: Entity }) {
+    private addPointToFolder(folderId: string, data: { position: Vec3; normal: Vec3; wgs84: { lat: number; lon: number; alt: number } | null; markerEntity: Entity }) {
         const folder = this.folders.find(f => f.id === folderId);
         if (!folder) return;
 
@@ -307,6 +351,7 @@ class SamplePointPanel extends Container {
             id: pointId,
             name: `Point ${pointNumber}`,
             position: data.position,
+            normal: data.normal,
             wgs84: data.wgs84,
             markerEntity: data.markerEntity
         };
@@ -425,6 +470,178 @@ class SamplePointPanel extends Container {
                 }
             }
         });
+    }
+
+    // ── route management ──
+
+    // toggle the route button: first click generates + enters edit mode,
+    // second click exits edit mode (route stays in the scene)
+    private toggleRouteMode(folderId: string) {
+        const folder = this.folders.find(f => f.id === folderId);
+        if (!folder) return;
+
+        if (folder.routeActive) {
+            this.stopRouteEditing(folderId);
+        } else {
+            this.startRouteEditing(folderId);
+        }
+    }
+
+    private startRouteEditing(folderId: string) {
+        const folder = this.folders.find(f => f.id === folderId);
+        if (!folder || folder.points.length === 0) return;
+
+        // stop sample point creation if active
+        if (this.activeFolderId) {
+            this.stopAddingPoints();
+        }
+
+        // stop any other folder's route editing
+        for (const f of this.folders) {
+            if (f.routeActive) {
+                this.stopRouteEditing(f.id);
+            }
+        }
+
+        folder.routeActive = true;
+        this.setFolderRouteState(folderId, true);
+
+        // hide bottom toolbar and activate the sample point tool
+        this.events.fire('bottomToolbar.hide');
+        this.events.fire('tool.samplePoint');
+
+        // generate route (tool fires route.generated when done)
+        const points = folder.points.map(p => ({
+            position: p.position,
+            normal: p.normal
+        }));
+        this.events.fire('samplePoint.generateRoute', points);
+
+        // enter route edit mode in the tool
+        this.events.fire('samplePoint.routeMode', true);
+    }
+
+    private stopRouteEditing(folderId: string) {
+        const folder = this.folders.find(f => f.id === folderId);
+        if (!folder) return;
+
+        folder.routeActive = false;
+        this.setFolderRouteState(folderId, false);
+
+        this.events.fire('samplePoint.routeMode', false);
+        this.events.fire('bottomToolbar.show');
+        this.events.fire('tool.move');
+    }
+
+    private setFolderRouteState(folderId: string, active: boolean) {
+        const el = this.folderElements.get(folderId);
+        if (el) {
+            el.header.class[active ? 'add' : 'remove']('route-active');
+        }
+    }
+
+    // add generated waypoints to the folder that has routeActive = true
+    private addWaypointsToFolder(waypoints: { position: Vec3; markerEntity: Entity }[]) {
+        const folder = this.folders.find(f => f.routeActive);
+        if (!folder) return;
+
+        folder.waypoints = [];
+        let wpCounter = 0;
+        for (const wp of waypoints) {
+            const id = `wp-${++pointCounter}`;
+            const data: WaypointData = {
+                id,
+                name: `WP ${++wpCounter}`,
+                position: wp.position,
+                markerEntity: wp.markerEntity
+            };
+            folder.waypoints.push(data);
+        }
+
+        this.renderWaypointSection(folder);
+    }
+
+    // render the waypoint sub-folder inside the folder content
+    private renderWaypointSection(folder: SampleFolder) {
+        const el = this.folderElements.get(folder.id);
+        if (!el) return;
+
+        // remove existing section
+        if (el.waypointSection) {
+            el.content.remove(el.waypointSection);
+        }
+
+        const section = new Container({ class: 'sample-waypoint-section' });
+
+        // sub-folder header
+        const wpHeader = new Container({ class: 'sample-waypoint-header' });
+        const wpIcon = new Container({ class: 'sample-waypoint-icon' });
+        wpIcon.dom.appendChild(createSvg(routeSvg));
+        const wpName = new Label({
+            class: 'sample-waypoint-name',
+            text: '航点'
+        });
+        const wpDeleteBtn = new Container({ class: 'sample-waypoint-delete' });
+        wpDeleteBtn.dom.appendChild(createSvg(deleteSvg));
+
+        wpHeader.append(wpIcon);
+        wpHeader.append(wpName);
+        wpHeader.append(wpDeleteBtn);
+        section.append(wpHeader);
+
+        // waypoint rows
+        const wpList = new Container({ class: 'sample-waypoint-list' });
+        for (const wp of folder.waypoints) {
+            const row = new Container({ class: 'sample-waypoint-row' });
+            const name = new Label({
+                class: 'sample-point-name',
+                text: wp.name
+            });
+            row.append(name);
+            wpList.append(row);
+
+            // hover to highlight the waypoint
+            row.dom.addEventListener('pointerenter', () => {
+                this.events.fire('samplePoint.highlight', wp.markerEntity);
+            });
+            row.dom.addEventListener('pointerleave', () => {
+                this.events.fire('samplePoint.unhighlight', wp.markerEntity);
+            });
+        }
+        section.append(wpList);
+
+        el.content.append(section);
+        el.waypointSection = section;
+
+        // delete handler
+        wpDeleteBtn.on('click', () => {
+            this.deleteWaypoints(folder.id);
+        });
+
+        this.tooltips.register(wpDeleteBtn, () => i18n.t('tooltip.samplePoint.deleteFolder'), 'left');
+    }
+
+    // delete the waypoint sub-folder and clear the route from the scene
+    private deleteWaypoints(folderId: string) {
+        const folder = this.folders.find(f => f.id === folderId);
+        if (!folder) return;
+
+        // exit route editing if active
+        if (folder.routeActive) {
+            this.stopRouteEditing(folderId);
+        }
+
+        // clear route from the tool
+        this.events.fire('route.clear');
+
+        folder.waypoints = [];
+
+        // remove UI section
+        const el = this.folderElements.get(folderId);
+        if (el && el.waypointSection) {
+            el.content.remove(el.waypointSection);
+            el.waypointSection = null;
+        }
     }
 }
 

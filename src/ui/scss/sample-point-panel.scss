@@ -54,6 +54,18 @@
         }
     }
 
+    &.route-active {
+        background-color: $bcg-light;
+
+        .sample-folder-route {
+            background-color: $clr-hilight;
+
+            svg {
+                color: $clr-active;
+            }
+        }
+    }
+
     .sample-folder-toggle {
         width: 16px;
         height: 16px;
@@ -93,6 +105,7 @@
     }
 
     .sample-folder-add-point,
+    .sample-folder-route,
     .sample-folder-delete {
         width: 20px;
         height: 20px;
@@ -202,5 +215,82 @@
                 color: $error;
             }
         }
+    }
+}
+
+// ── waypoint sub-folder ──
+.sample-waypoint-section {
+    border-top: 1px solid $bcg-darkest;
+    margin-top: 2px;
+}
+
+.sample-waypoint-header {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 3px 4px 3px 20px;
+    background-color: $bcg-dark;
+
+    .sample-waypoint-icon {
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+
+        svg {
+            color: #4da6ff;
+        }
+    }
+
+    .sample-waypoint-name {
+        color: #4da6ff;
+        flex-grow: 1;
+        font-size: 11px;
+        padding: 0 4px;
+    }
+
+    .sample-waypoint-delete {
+        width: 18px;
+        height: 18px;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 3px;
+
+        svg {
+            color: $text-dark;
+        }
+
+        &:hover {
+            background-color: $bcg-darkest;
+            cursor: pointer;
+
+            svg {
+                color: $error;
+            }
+        }
+    }
+}
+
+.sample-waypoint-list {
+    padding: 0;
+}
+
+.sample-waypoint-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 2px 4px 2px 28px;
+
+    &:hover {
+        background-color: $bcg-darker;
+    }
+
+    .sample-point-name {
+        color: #4da6ff;
+        font-size: 11px;
     }
 }

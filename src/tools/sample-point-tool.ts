@@ -1,4 +1,4 @@
-import { Color, Entity, Mat4, StandardMaterial, TranslateGizmo, Vec3 } from 'playcanvas';
+import { Color, Entity, Mat4, Mesh, MeshInstance, PRIMITIVE_LINESTRIP, StandardMaterial, TranslateGizmo, Vec3 } from 'playcanvas';
 import proj4 from 'proj4';
 
 import { EditOp } from '../edit-ops';
@@ -82,6 +82,12 @@ class SamplePointTool {
 
     // root entity that holds all sample point markers
     private root: Entity | null = null;
+    // entity that holds generated waypoints and route line
+    private routeEntity: Entity | null = null;
+    // line mesh reference for updating positions when waypoints move
+    private routeMesh: Mesh | null = null;
+    // when true, surface clicks don't create new markers; waypoint dragging is enabled
+    private routeEditMode = false;
     private active = false;
 
     // gizmo for moving markers
@@ -116,13 +122,19 @@ class SamplePointTool {
                 const newPos = this.selectedMarker.getLocalPosition().clone();
                 // only record if the marker actually moved
                 if (!newPos.equals(this.dragStartPos)) {
-                    // suppress do because the gizmo already applied the move
-                    events.fire('edit.add', new MoveSamplePointOp(
-                        this.selectedMarker,
-                        this.dragStartPos,
-                        newPos,
-                        scene
-                    ), true);
+                    if (this.selectedMarker.name === 'waypoint') {
+                        // update route line when a waypoint moves
+                        this.updateRouteLine();
+                        events.fire('waypoint.moved', this.selectedMarker, newPos.clone());
+                    } else {
+                        // suppress do because the gizmo already applied the move
+                        events.fire('edit.add', new MoveSamplePointOp(
+                            this.selectedMarker,
+                            this.dragStartPos,
+                            newPos,
+                            scene
+                        ), true);
+                    }
                 }
                 this.dragStartPos = null;
             }
@@ -159,6 +171,9 @@ class SamplePointTool {
                     } else {
                         this.selectMarker(hit);
                     }
+                } else if (this.routeEditMode) {
+                    // in route edit mode, clicking empty space just deselects
+                    this.deselectMarker();
                 } else {
                     // try to place a new marker on the model surface
                     const x = this.clickX / this.canvasContainer.clientWidth;
@@ -166,7 +181,10 @@ class SamplePointTool {
                     const result = await scene.camera.intersect(x, y);
                     if (result) {
                         this.deselectMarker();
-                        this.createMarker(result.position);
+                        // approximate surface normal as direction from surface to camera
+                        const cameraPos = scene.camera.mainCamera.getPosition();
+                        const normal = new Vec3().sub2(cameraPos, result.position).normalize();
+                        this.createMarker(result.position, normal);
                     }
                 }
 
@@ -227,6 +245,24 @@ class SamplePointTool {
         events.on('samplePoint.unhighlight', (marker: Entity) => {
             this.unhighlightMarker(marker);
         });
+
+        // generate waypoints and route line from sample points
+        events.on('samplePoint.generateRoute', (points: { position: Vec3; normal: Vec3 }[]) => {
+            this.generateRoute(points);
+        });
+
+        // toggle route editing mode (enables waypoint picking/moving)
+        events.on('samplePoint.routeMode', (active: boolean) => {
+            this.routeEditMode = active;
+            if (!active) {
+                this.deselectMarker();
+            }
+        });
+
+        // clear the generated route
+        events.on('route.clear', () => {
+            this.clearRoute();
+        });
     }
 
     // build a yellow sphere entity (not yet added to the scene)
@@ -260,28 +296,32 @@ class SamplePointTool {
         return entity;
     }
 
-    // highlight a marker: change color to orange
+    // highlight a marker: sky blue for waypoints, orange for sample points
     private highlightMarker(marker: Entity) {
         if (!marker.render) return;
         const material = marker.render.meshInstances[0].material as StandardMaterial;
-        material.diffuse = new Color(1, 0.5, 0);
-        material.emissive = new Color(1, 0.5, 0);
+        const isWaypoint = marker.name === 'waypoint';
+        const color = isWaypoint ? new Color(0, 0.8, 1) : new Color(1, 0.5, 0);
+        material.diffuse = color;
+        material.emissive = color;
         material.update();
         this.scene.forceRender = true;
     }
 
-    // unhighlight a marker: restore yellow
+    // unhighlight a marker: restore original color (yellow for sample points, blue for waypoints)
     private unhighlightMarker(marker: Entity) {
         if (!marker.render) return;
         const material = marker.render.meshInstances[0].material as StandardMaterial;
-        material.diffuse = new Color(1, 1, 0);
-        material.emissive = new Color(1, 1, 0);
+        const isWaypoint = marker.name === 'waypoint';
+        const restore = isWaypoint ? new Color(0, 0.5, 1) : new Color(1, 1, 0);
+        material.diffuse = restore;
+        material.emissive = restore;
         material.update();
         this.scene.forceRender = true;
     }
 
     // create a marker and register it as an undoable operation
-    private createMarker(position: Vec3) {
+    private createMarker(position: Vec3, normal: Vec3) {
         if (!this.root) return;
 
         const marker = this.makeMarkerEntity(position);
@@ -296,6 +336,7 @@ class SamplePointTool {
         // notify listeners (e.g. sample point panel) that a marker was created
         this.events.fire('samplePoint.created', {
             position: position.clone(),
+            normal: normal.clone(),
             wgs84: wgs84 ? { ...wgs84 } : null,
             markerEntity: marker
         });
@@ -364,10 +405,6 @@ class SamplePointTool {
 
     // find the marker closest to the given screen-space pixel coordinate
     private pickMarker(px: number, py: number): Entity | null {
-        if (!this.root || this.root.children.length === 0) {
-            return null;
-        }
-
         const cameraPos = this.scene.camera.mainCamera.getPosition();
         const cameraFwd = this.scene.camera.mainCamera.forward;
         const w = this.canvasContainer.clientWidth;
@@ -376,14 +413,13 @@ class SamplePointTool {
         let closest: Entity | null = null;
         let closestDist = MARKER_PICK_RADIUS;
 
-        for (const child of this.root.children) {
-            const marker = child as Entity;
+        const check = (marker: Entity) => {
             marker.getWorldTransform().getTranslation(tmpWorld);
 
             // ignore markers behind the camera (their projection is mirrored)
             tmpDir.sub2(tmpWorld, cameraPos);
             if (tmpDir.dot(cameraFwd) <= 0) {
-                continue;
+                return;
             }
 
             this.scene.camera.worldToScreen(tmpWorld, tmpScreen);
@@ -395,6 +431,22 @@ class SamplePointTool {
                 closestDist = dist;
                 closest = marker;
             }
+        };
+
+        // check sample points
+        if (this.root) {
+            for (const child of this.root.children) {
+                check(child as Entity);
+            }
+        }
+
+        // check waypoints
+        if (this.routeEntity) {
+            for (const child of this.routeEntity.children) {
+                if ((child as Entity).name === 'waypoint') {
+                    check(child as Entity);
+                }
+            }
         }
 
         return closest;
@@ -402,11 +454,122 @@ class SamplePointTool {
 
     private clearMarkers() {
         this.deselectMarker();
+        this.clearRoute();
         if (this.root) {
             for (const child of [...this.root.children]) {
                 (child as Entity).destroy();
             }
         }
+    }
+
+    // remove an existing generated route
+    private clearRoute() {
+        this.deselectMarker();
+        if (this.routeEntity) {
+            this.routeEntity.destroy();
+            this.routeEntity = null;
+        }
+        this.routeMesh = null;
+        this.routeEditMode = false;
+        this.scene.forceRender = true;
+    }
+
+    // update the route line mesh when a waypoint moves
+    private updateRouteLine() {
+        if (!this.routeEntity || !this.routeMesh) return;
+
+        const positions: number[] = [];
+        for (const child of this.routeEntity.children) {
+            if ((child as Entity).name === 'waypoint') {
+                const pos = (child as Entity).getLocalPosition();
+                positions.push(pos.x, pos.y, pos.z);
+            }
+        }
+
+        this.routeMesh.setPositions(positions);
+        this.routeMesh.update(PRIMITIVE_LINESTRIP);
+        this.scene.forceRender = true;
+    }
+
+    // generate waypoints and a blue route line from sample points.
+    // each waypoint is placed 10 units along the surface normal from the
+    // corresponding sample point.
+    private generateRoute(points: { position: Vec3; normal: Vec3 }[]) {
+        this.clearRoute();
+
+        if (!this.root || points.length === 0) return;
+
+        const { scene } = this;
+        const device = scene.graphicsDevice;
+        const routeEntity = new Entity('sampleRoute');
+
+        // size for waypoint markers (same scale logic as sample points)
+        const sceneRadius = scene.bound.halfExtents.length();
+        const wpRadius = Math.max(sceneRadius * 0.002 / 3, 0.0005 / 3);
+        const wpScale = wpRadius * 2;
+
+        // offset distance along the surface normal (10 m)
+        const offset = 10;
+
+        const hoverPositions: Vec3[] = [];
+        const waypointData: { position: Vec3; markerEntity: Entity }[] = [];
+
+        for (const point of points) {
+            const hoverPos = new Vec3(
+                point.position.x + point.normal.x * offset,
+                point.position.y + point.normal.y * offset,
+                point.position.z + point.normal.z * offset
+            );
+            hoverPositions.push(hoverPos);
+
+            // waypoint marker (blue sphere)
+            const wp = new Entity('waypoint');
+            wp.addComponent('render', { type: 'sphere' });
+            const mat = new StandardMaterial();
+            mat.diffuse = new Color(0, 0.5, 1);
+            mat.emissive = new Color(0, 0.5, 1);
+            mat.metalness = 0;
+            mat.update();
+            wp.render.meshInstances[0].material = mat;
+            wp.render.layers = [scene.worldLayer.id];
+            wp.setLocalScale(wpScale, wpScale, wpScale);
+            wp.setLocalPosition(hoverPos);
+            routeEntity.addChild(wp);
+
+            waypointData.push({ position: hoverPos.clone(), markerEntity: wp });
+        }
+
+        // create route line connecting all waypoints
+        if (hoverPositions.length >= 2) {
+            const positions: number[] = [];
+            for (const pos of hoverPositions) {
+                positions.push(pos.x, pos.y, pos.z);
+            }
+
+            const mesh = new Mesh(device);
+            mesh.setPositions(positions);
+            mesh.update(PRIMITIVE_LINESTRIP);
+            this.routeMesh = mesh;
+
+            const lineMat = new StandardMaterial();
+            lineMat.diffuse = new Color(0, 0.5, 1);
+            lineMat.emissive = new Color(0, 0.5, 1);
+            lineMat.metalness = 0;
+            lineMat.update();
+
+            const meshInstance = new MeshInstance(mesh, lineMat);
+            const lineEntity = new Entity('routeLine');
+            lineEntity.addComponent('render', { meshInstances: [meshInstance] });
+            lineEntity.render.layers = [scene.worldLayer.id];
+            routeEntity.addChild(lineEntity);
+        }
+
+        scene.app.root.addChild(routeEntity);
+        this.routeEntity = routeEntity;
+        scene.forceRender = true;
+
+        // notify listeners (panel) of the generated waypoints
+        this.events.fire('route.generated', waypointData);
     }
 }
 

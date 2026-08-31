@@ -351,6 +351,7 @@
     "tooltip.samplePoint.addFolder": "新建文件夹",
     "tooltip.samplePoint.addPoint": "新增采样点",
     "tooltip.samplePoint.deleteFolder": "删除文件夹",
+    "tooltip.samplePoint.generateRoute": "生成航点及航线",
 
     "tooltip.status-bar.timeline": "切换时间线面板",
     "tooltip.status-bar.splat-data": "切换高斯点数据面板",
