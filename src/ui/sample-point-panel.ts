@@ -301,10 +301,11 @@ class SamplePointPanel extends Container {
         const folder = this.folders.find(f => f.id === folderId);
         if (!folder) return;
 
+        const pointNumber = folder.points.length + 1;
         const pointId = `point-${++pointCounter}`;
         const point: SamplePointData = {
             id: pointId,
-            name: `Point ${pointCounter}`,
+            name: `Point ${pointNumber}`,
             position: data.position,
             wgs84: data.wgs84,
             markerEntity: data.markerEntity
@@ -365,6 +366,14 @@ class SamplePointPanel extends Container {
         deleteBtn.on('click', () => {
             this.deletePoint(folder.id, point.id);
         });
+
+        // ── hover: highlight the corresponding marker in 3D ──
+        item.dom.addEventListener('pointerenter', () => {
+            this.events.fire('samplePoint.highlight', point.markerEntity);
+        });
+        item.dom.addEventListener('pointerleave', () => {
+            this.events.fire('samplePoint.unhighlight', point.markerEntity);
+        });
     }
 
     private deletePoint(folderId: string, pointId: string) {
@@ -393,7 +402,29 @@ class SamplePointPanel extends Container {
             }
         }
 
+        // re-number remaining points in the folder
+        this.renumberPoints(folder);
+
         this.events.fire('samplePoint.forceRender');
+    }
+
+    // re-assign sequential numbers (from 1) to all points in a folder
+    private renumberPoints(folder: SampleFolder) {
+        const el = this.folderElements.get(folder.id);
+        folder.points.forEach((point, i) => {
+            const number = i + 1;
+            point.name = `Point ${number}`;
+            // update UI label
+            if (el) {
+                const item = el.items.get(point.id);
+                if (item) {
+                    const nameDom = item.dom.querySelector('.sample-point-name') as HTMLElement | null;
+                    if (nameDom) {
+                        nameDom.textContent = point.name;
+                    }
+                }
+            }
+        });
     }
 }
 

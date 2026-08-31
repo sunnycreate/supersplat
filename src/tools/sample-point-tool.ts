@@ -219,6 +219,14 @@ class SamplePointTool {
 
         // clear all markers when the scene is cleared
         events.on('scene.clear', () => this.clearMarkers());
+
+        // highlight/unhighlight a marker (e.g. when hovering a panel row)
+        events.on('samplePoint.highlight', (marker: Entity) => {
+            this.highlightMarker(marker);
+        });
+        events.on('samplePoint.unhighlight', (marker: Entity) => {
+            this.unhighlightMarker(marker);
+        });
     }
 
     // build a yellow sphere entity (not yet added to the scene)
@@ -228,7 +236,7 @@ class SamplePointTool {
         // size relative to the scene so the marker is visible at any scale.
         // kept small (under half the previous size) per design.
         const sceneRadius = scene.bound.halfExtents.length();
-        const radius = Math.max(sceneRadius * 0.002, 0.0005);
+        const radius = Math.max(sceneRadius * 0.002 / 3, 0.0005 / 3);
 
         const entity = new Entity('samplePoint');
         entity.addComponent('render', {
@@ -250,6 +258,26 @@ class SamplePointTool {
         entity.setLocalPosition(position);
 
         return entity;
+    }
+
+    // highlight a marker: change color to orange
+    private highlightMarker(marker: Entity) {
+        if (!marker.render) return;
+        const material = marker.render.meshInstances[0].material as StandardMaterial;
+        material.diffuse = new Color(1, 0.5, 0);
+        material.emissive = new Color(1, 0.5, 0);
+        material.update();
+        this.scene.forceRender = true;
+    }
+
+    // unhighlight a marker: restore yellow
+    private unhighlightMarker(marker: Entity) {
+        if (!marker.render) return;
+        const material = marker.render.meshInstances[0].material as StandardMaterial;
+        material.diffuse = new Color(1, 1, 0);
+        material.emissive = new Color(1, 1, 0);
+        material.update();
+        this.scene.forceRender = true;
     }
 
     // create a marker and register it as an undoable operation
