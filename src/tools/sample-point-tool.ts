@@ -492,7 +492,7 @@ class SamplePointTool {
     }
 
     // generate waypoints and a blue route line from sample points.
-    // each waypoint is placed 10 units along the surface normal from the
+    // each waypoint is placed 2.2 units along the surface normal from the
     // corresponding sample point.
     private generateRoute(points: { position: Vec3; normal: Vec3 }[]) {
         this.clearRoute();
@@ -508,8 +508,8 @@ class SamplePointTool {
         const wpRadius = Math.max(sceneRadius * 0.002 / 3, 0.0005 / 3);
         const wpScale = wpRadius * 2;
 
-        // offset distance along the surface normal (10 m)
-        const offset = 10;
+        // offset distance along the surface normal (2.2 m)
+        const offset = 2.2;
 
         const hoverPositions: Vec3[] = [];
         const waypointData: { position: Vec3; markerEntity: Entity }[] = [];
