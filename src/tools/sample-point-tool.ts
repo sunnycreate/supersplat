@@ -1,9 +1,12 @@
-import { Color, Entity, Mat4, Mesh, MeshInstance, PRIMITIVE_LINESTRIP, StandardMaterial, TranslateGizmo, Vec3 } from 'playcanvas';
+import { Color, Entity, Mat4, Mesh, MeshInstance, PRIMITIVE_LINES, StandardMaterial, TranslateGizmo, Vec3 } from 'playcanvas';
 import proj4 from 'proj4';
 
 import { EditOp } from '../edit-ops';
 import { ElementType } from '../element';
 import { Events } from '../events';
+import { ClearanceField, RouteSafetyReport } from '../route/clearance-field';
+import { planDetour, snapToSafe, solveHoverPoint } from '../route/route-planner';
+import { SafetyLevel, levelColor } from '../route/safety-config';
 import { Scene } from '../scene';
 import { Splat } from '../splat';
 
@@ -18,30 +21,48 @@ const tmpScreen = new Vec3();
 const tmpWorld = new Vec3();
 const tmpDir = new Vec3();
 
+// payload the panel needs to create (or restore) a row for a marker
+interface SamplePointCreatedData {
+    position: Vec3;
+    normal: Vec3;
+    wgs84: { lat: number; lon: number; alt: number } | null;
+    markerEntity: Entity;
+}
+
 // add a sample point marker to the scene (undo removes it)
 class AddSamplePointOp implements EditOp {
     name = 'addSamplePoint';
     parent: Entity;
     marker: Entity;
     scene: Scene;
+    events: Events;
+    data: SamplePointCreatedData;
 
-    constructor(parent: Entity, marker: Entity, scene: Scene) {
+    constructor(parent: Entity, marker: Entity, scene: Scene, events: Events, data: SamplePointCreatedData) {
         this.parent = parent;
         this.marker = marker;
         this.scene = scene;
+        this.events = events;
+        this.data = data;
     }
 
+    // fired from do()/undo() rather than from createMarker so that redo also
+    // restores the panel row (the edit history replays do())
     do() {
         this.parent.addChild(this.marker);
         this.scene.forceRender = true;
+        this.events.fire('samplePoint.created', this.data);
     }
 
     undo() {
         this.parent.removeChild(this.marker);
         this.scene.forceRender = true;
+        this.events.fire('samplePoint.removed', this.marker);
     }
 
     destroy() {
+        // the op is being discarded: drop the row along with the marker
+        this.events.fire('samplePoint.removed', this.marker);
         this.marker.destroy();
     }
 }
@@ -79,13 +100,32 @@ class SamplePointTool {
     private events: Events;
     private scene: Scene;
     private canvasContainer: HTMLElement;
+    // obstacle field used to measure waypoint / route safety
+    private clearance: ClearanceField;
 
     // root entity that holds all sample point markers
     private root: Entity | null = null;
     // entity that holds generated waypoints and route line
     private routeEntity: Entity | null = null;
-    // line mesh reference for updating positions when waypoints move
-    private routeMesh: Mesh | null = null;
+    // the route connector is drawn as a single line batch (leg safety is not
+    // flagged: the drone flies the waypoints in sequence)
+    private routeLine: { entity: Entity | null; mesh: Mesh | null } = { entity: null, mesh: null };
+    private lineMaterial: StandardMaterial;
+
+    // per-waypoint distance indicators: a line from the waypoint to the closest
+    // obstacle point plus a small anchor marker on the model. drawn in the tool
+    // overlay layer so they stay visible through the gaussians.
+    private distEntity: Entity | null = null;
+    private distLine: { entity: Entity | null; mesh: Mesh | null } = { entity: null, mesh: null };
+    private distLineDanger: { entity: Entity | null; mesh: Mesh | null } = { entity: null, mesh: null };
+    private distMaterial: StandardMaterial;
+    private distDangerMaterial: StandardMaterial;
+    private distAnchors: Entity[] = [];
+    // measured safety level per waypoint entity (drives its base colour)
+    private markerLevels = new Map<Entity, SafetyLevel>();
+    // set while a validation is running; a queued flag re-runs it afterwards
+    private validating = false;
+    private validationQueued = false;
     // when true, surface clicks don't create new markers; waypoint dragging is enabled
     private routeEditMode = false;
     private active = false;
@@ -99,10 +139,16 @@ class SamplePointTool {
     private clickX = 0;
     private clickY = 0;
 
-    constructor(events: Events, scene: Scene, canvasContainer: HTMLElement) {
+    constructor(events: Events, scene: Scene, canvasContainer: HTMLElement, clearance: ClearanceField) {
         this.events = events;
         this.scene = scene;
         this.canvasContainer = canvasContainer;
+        this.clearance = clearance;
+
+        // line materials (created once and reused across rebuilds)
+        this.lineMaterial = this.makeLineMaterial(new Color(0, 0.5, 1));
+        this.distMaterial = this.makeLineMaterial(new Color(0.098, 1, 0.137));
+        this.distDangerMaterial = this.makeLineMaterial(new Color(1, 0.15, 0.1));
 
         // translate gizmo for repositioning markers
         this.gizmo = new TranslateGizmo(scene.camera.camera, scene.gizmoLayer);
@@ -119,11 +165,14 @@ class SamplePointTool {
 
         this.gizmo.on('transform:end', () => {
             if (this.selectedMarker && this.dragStartPos) {
-                const newPos = this.selectedMarker.getLocalPosition().clone();
+                let newPos = this.selectedMarker.getLocalPosition().clone();
                 // only record if the marker actually moved
                 if (!newPos.equals(this.dragStartPos)) {
                     if (this.selectedMarker.name === 'waypoint') {
-                        // update route line when a waypoint moves
+                        // P2: dragged into danger — push it back to safety, and
+                        // restore the previous position when that isn't possible
+                        newPos = this.snapWaypoint(this.selectedMarker, this.dragStartPos);
+                        // re-plan the route (legs may need a new detour)
                         this.updateRouteLine();
                         events.fire('waypoint.moved', this.selectedMarker, newPos.clone());
                     } else {
@@ -238,6 +287,11 @@ class SamplePointTool {
         // clear all markers when the scene is cleared
         events.on('scene.clear', () => this.clearMarkers());
 
+        // focus the camera on a marker (e.g. clicking a panel row)
+        events.on('samplePoint.focus', (marker: Entity) => {
+            this.focusMarker(marker);
+        });
+
         // highlight/unhighlight a marker (e.g. when hovering a panel row)
         events.on('samplePoint.highlight', (marker: Entity) => {
             this.highlightMarker(marker);
@@ -262,6 +316,12 @@ class SamplePointTool {
         // clear the generated route
         events.on('route.clear', () => {
             this.clearRoute();
+        });
+
+        // re-measure the route on demand (e.g. the panel's validate button)
+        events.on('route.safety.request', () => {
+            this.clearance.invalidate();
+            this.scheduleValidation();
         });
     }
 
@@ -308,16 +368,63 @@ class SamplePointTool {
         this.scene.forceRender = true;
     }
 
-    // unhighlight a marker: restore original color (yellow for sample points, blue for waypoints)
+    // unhighlight a marker: restore its base color (yellow for sample points,
+    // safety-graded blue/amber/red for waypoints)
     private unhighlightMarker(marker: Entity) {
         if (!marker.render) return;
         const material = marker.render.meshInstances[0].material as StandardMaterial;
         const isWaypoint = marker.name === 'waypoint';
-        const restore = isWaypoint ? new Color(0, 0.5, 1) : new Color(1, 1, 0);
+        const restore = isWaypoint ?
+            levelColor(this.markerLevels.get(marker) ?? SafetyLevel.unknown) :
+            new Color(1, 1, 0);
         material.diffuse = restore;
         material.emissive = restore;
         material.update();
         this.scene.forceRender = true;
+    }
+
+    // fly the camera to a marker, keeping the current zoom when it is already
+    // close enough to make out the marker
+    private focusMarker(marker: Entity) {
+        if (!marker) return;
+
+        const { scene } = this;
+        const camera = scene.camera;
+        const sceneRadius = scene.bound.halfExtents.length();
+        const currentRadius = camera.distance * sceneRadius / camera.fovFactor;
+        const radius = Math.min(currentRadius, sceneRadius * 0.08);
+
+        camera.focus({
+            focalPoint: marker.getPosition(),
+            radius,
+            speed: 1
+        });
+
+        scene.forceRender = true;
+    }
+
+    // P2: keep a dragged waypoint out of danger. Returns the position actually
+    // applied (snapped, or the previous one when no safe spot was reachable).
+    private snapWaypoint(marker: Entity, previous: Vec3): Vec3 {
+        if (!this.clearance.ready) {
+            return marker.getLocalPosition().clone();
+        }
+
+        const { position, ok } = snapToSafe(this.clearance, marker.getLocalPosition(), this.clearance.config);
+        marker.setLocalPosition(ok ? position : previous);
+
+        return marker.getLocalPosition().clone();
+    }
+
+    // set a waypoint marker's colour from its measured safety level
+    private applyMarkerLevel(marker: Entity, level: SafetyLevel) {
+        this.markerLevels.set(marker, level);
+        if (!marker.render) return;
+        const material = marker.render.meshInstances[0].material as StandardMaterial;
+        const color = levelColor(level);
+        material.diffuse = color;
+        material.emissive = color;
+        material.update();
     }
 
     // create a marker and register it as an undoable operation
@@ -325,21 +432,22 @@ class SamplePointTool {
         if (!this.root) return;
 
         const marker = this.makeMarkerEntity(position);
-        const op = new AddSamplePointOp(this.root, marker, this.scene);
-        // edit.add calls op.do() which adds the marker to the scene
-        this.events.fire('edit.add', op);
-        this.scene.forceRender = true;
 
         // compute WGS84 coordinates if geo metadata is available
         const wgs84 = this.sceneToWgs84(position);
 
-        // notify listeners (e.g. sample point panel) that a marker was created
-        this.events.fire('samplePoint.created', {
+        const data: SamplePointCreatedData = {
             position: position.clone(),
             normal: normal.clone(),
             wgs84: wgs84 ? { ...wgs84 } : null,
             markerEntity: marker
-        });
+        };
+
+        // edit.add calls op.do() which adds the marker to the scene and fires
+        // 'samplePoint.created'; the edit history replays do()/undo() on
+        // redo/undo so the panel row follows the marker both ways
+        this.events.fire('edit.add', new AddSamplePointOp(this.root, marker, this.scene, this.events, data));
+        this.scene.forceRender = true;
 
         if (wgs84) {
             // eslint-disable-next-line no-console
@@ -465,42 +573,286 @@ class SamplePointTool {
     // remove an existing generated route
     private clearRoute() {
         this.deselectMarker();
+        this.markerLevels.clear();
+        this.disposeLine(this.routeLine);
+        this.disposeLine(this.distLine);
+        this.disposeLine(this.distLineDanger);
+        this.distAnchors.length = 0;
         if (this.routeEntity) {
             this.routeEntity.destroy();
             this.routeEntity = null;
         }
-        this.routeMesh = null;
+        if (this.distEntity) {
+            this.distEntity.destroy();
+            this.distEntity = null;
+        }
         this.routeEditMode = false;
         this.scene.forceRender = true;
     }
 
-    // update the route line mesh when a waypoint moves
-    private updateRouteLine() {
-        if (!this.routeEntity || !this.routeMesh) return;
-
-        const positions: number[] = [];
+    // ordered list of the waypoints currently in the route
+    private waypointPositions(): { entity: Entity; position: Vec3 }[] {
+        const result: { entity: Entity; position: Vec3 }[] = [];
+        if (!this.routeEntity) return result;
         for (const child of this.routeEntity.children) {
             if ((child as Entity).name === 'waypoint') {
-                const pos = (child as Entity).getLocalPosition();
-                positions.push(pos.x, pos.y, pos.z);
+                result.push({
+                    entity: child as Entity,
+                    position: (child as Entity).getLocalPosition().clone()
+                });
             }
         }
-
-        this.routeMesh.setPositions(positions);
-        this.routeMesh.update(PRIMITIVE_LINESTRIP);
-        this.scene.forceRender = true;
+        return result;
     }
 
-    // generate waypoints and a blue route line from sample points.
-    // each waypoint is placed 2.2 units along the surface normal from the
-    // corresponding sample point.
-    private generateRoute(points: { position: Vec3; normal: Vec3 }[]) {
+    // ── route line batches ──
+
+    private makeLineMaterial(color: Color) {
+        const material = new StandardMaterial();
+        material.diffuse = color;
+        material.emissive = color;
+        material.metalness = 0;
+        material.update();
+        return material;
+    }
+
+    private disposeLine(line: { entity: Entity | null; mesh: Mesh | null }) {
+        if (line.entity) {
+            line.entity.destroy();
+        }
+        if (line.mesh) {
+            line.mesh.destroy();
+        }
+        line.entity = null;
+        line.mesh = null;
+    }
+
+    // (re)create one line batch. PRIMITIVE_LINES consumes vertex pairs so the
+    // safe and unsafe portions of the route can be drawn as separate batches.
+    private setLine(parent: Entity | null, line: { entity: Entity | null; mesh: Mesh | null }, name: string, positions: number[], material: StandardMaterial, layerId?: number) {
+        this.disposeLine(line);
+        if (!parent || positions.length < 2) return;
+
+        const mesh = new Mesh(this.scene.graphicsDevice);
+        mesh.setPositions(positions);
+        mesh.update(PRIMITIVE_LINES);
+
+        const entity = new Entity(name);
+        entity.addComponent('render', { meshInstances: [new MeshInstance(mesh, material)] });
+        entity.render.layers = [layerId ?? this.scene.worldLayer.id];
+        parent.addChild(entity);
+
+        line.entity = entity;
+        line.mesh = mesh;
+    }
+
+    private setRouteLine(positions: number[]) {
+        if (!this.routeEntity) return;
+        this.setLine(this.routeEntity, this.routeLine, 'routeLine', positions, this.lineMaterial);
+    }
+
+    // ── route planning + validation ──
+
+    // request a re-plan; collapses bursts into a single pending run
+    private scheduleValidation() {
+        if (this.validating) {
+            this.validationQueued = true;
+            return;
+        }
+        this.updateRoute();
+    }
+
+    // Plan the legs between waypoints (P2), then measure and draw everything.
+    // Waypoint positions are only changed by explicit snapping, never here.
+    private async updateRoute() {
+        if (this.validating) {
+            this.validationQueued = true;
+            return;
+        }
+        this.validating = true;
+
+        try {
+            const ready = await this.clearance.ensureBuilt(this.scene);
+
+            // the route may have been cleared while the field was building
+            if (!this.routeEntity) return;
+
+            const waypoints = this.waypointPositions();
+            if (waypoints.length === 0) return;
+
+            const report: RouteSafetyReport = {
+                ready,
+                hardClearance: this.clearance.hardClearance,
+                waypoints: [],
+                segments: [],
+                minClearance: -1,
+                dangerCount: 0
+            };
+
+            if (!ready) {
+                // nothing measurable — tell the panel the measurement is unavailable
+                for (const wp of waypoints) {
+                    report.waypoints.push({ entity: wp.entity, clearance: -1, level: SafetyLevel.unknown });
+                }
+                this.drawRoute(waypoints.map(w => w.position));
+                this.drawDistanceIndicators(waypoints, report);
+                this.events.fire('route.validated', report);
+                return;
+            }
+
+            for (const wp of waypoints) {
+                const clearance = this.clearance.clearance(wp.position);
+                const level = this.clearance.level(clearance);
+                this.applyMarkerLevel(wp.entity, level);
+                report.waypoints.push({ entity: wp.entity, clearance, level });
+            }
+
+            // plan each leg; the polyline we draw follows the safe path
+            const path: Vec3[] = [];
+            for (let i = 0; i < waypoints.length; i++) {
+                const a = waypoints[i].position;
+                path.push(a.clone());
+
+                if (i === waypoints.length - 1) break;
+
+                const b = waypoints[i + 1].position;
+                const detour = planDetour(this.clearance, a, b, this.clearance.config);
+
+                const leg: Vec3[] = [a.clone()];
+                if (detour) {
+                    for (const p of detour) {
+                        leg.push(p.clone());
+                        path.push(p.clone());
+                    }
+                }
+                leg.push(b.clone());
+
+                let min = Infinity;
+                let minPoint = a;
+                for (let k = 0; k < leg.length - 1; k++) {
+                    const result = this.clearance.segmentMinClearance(leg[k], leg[k + 1]);
+                    if (result.clearance >= 0 && result.clearance < min) {
+                        min = result.clearance;
+                        minPoint = result.point;
+                    }
+                }
+
+                // legs are never flagged: P2 routes them around obstacles and
+                // the waypoints carry the safety gate
+                report.segments.push({
+                    index: i,
+                    clearance: min === Infinity ? -1 : min,
+                    level: SafetyLevel.safe,
+                    point: minPoint.clone()
+                });
+            }
+
+            const measured = [
+                ...report.waypoints.map(w => w.clearance),
+                ...report.segments.map(s => s.clearance)
+            ].filter(c => c >= 0);
+
+            report.minClearance = measured.length ? Math.min(...measured) : -1;
+            report.dangerCount = report.waypoints.filter(x => x.level === SafetyLevel.danger).length;
+
+            this.drawRoute(path);
+            this.drawDistanceIndicators(waypoints, report);
+            this.scene.forceRender = true;
+            this.events.fire('route.validated', report);
+        } finally {
+            this.validating = false;
+            if (this.validationQueued) {
+                this.validationQueued = false;
+                this.updateRoute();
+            }
+        }
+    }
+
+    // draw the route connector through the given polyline
+    private drawRoute(path: Vec3[]) {
+        const positions: number[] = [];
+        for (let i = 0; i < path.length - 1; i++) {
+            const a = path[i];
+            const b = path[i + 1];
+            positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+        }
+        this.setRouteLine(positions);
+    }
+
+    // one line per waypoint from the waypoint to the closest obstacle point,
+    // plus a small anchor marker on the model, so the measured distance can be
+    // seen — and steered — in space instead of only read in the panel.
+    // drawn in the tool overlay layer so it stays visible through the gaussians.
+    private drawDistanceIndicators(waypoints: { entity: Entity; position: Vec3 }[], report: RouteSafetyReport) {
+        // drop the previous indicators
+        this.disposeLine(this.distLine);
+        this.disposeLine(this.distLineDanger);
+        if (this.distEntity) {
+            for (const child of [...this.distEntity.children]) {
+                (child as Entity).destroy();
+            }
+        }
+        this.distAnchors.length = 0;
+
+        if (!this.distEntity || !report.ready) return;
+
+        const safe: number[] = [];
+        const danger: number[] = [];
+        const anchor = new Vec3();
+
+        const sceneRadius = this.scene.bound.halfExtents.length();
+        // half the waypoint marker size
+        const anchorScale = Math.max(sceneRadius * 0.002 / 3, 0.0005 / 3);
+
+        for (let i = 0; i < waypoints.length; i++) {
+            const wp = waypoints[i];
+            const info = report.waypoints[i];
+            const d = this.clearance.nearestObstacle(wp.position, anchor);
+            if (d < 0 || d >= this.clearance.config.maxClearance) {
+                continue;   // nothing measurable within range
+            }
+
+            const isDanger = info.level === SafetyLevel.danger;
+            const target = isDanger ? danger : safe;
+            target.push(wp.position.x, wp.position.y, wp.position.z, anchor.x, anchor.y, anchor.z);
+
+            const marker = new Entity('distAnchor');
+            marker.addComponent('render', { type: 'sphere' });
+            marker.render.meshInstances[0].material = isDanger ? this.distDangerMaterial : this.distMaterial;
+            marker.render.layers = [this.scene.overlayLayer.id];
+            marker.setLocalScale(anchorScale, anchorScale, anchorScale);
+            marker.setLocalPosition(anchor);
+            this.distEntity.addChild(marker);
+            this.distAnchors.push(marker);
+        }
+
+        this.setLine(this.distEntity, this.distLine, 'distLineSafe', safe, this.distMaterial, this.scene.overlayLayer.id);
+        this.setLine(this.distEntity, this.distLineDanger, 'distLineDanger', danger, this.distDangerMaterial, this.scene.overlayLayer.id);
+    }
+
+    // redraw the route from the current waypoint positions and re-plan it
+    private updateRouteLine() {
+        this.drawRoute(this.waypointPositions().map(w => w.position));
+        this.scene.forceRender = true;
+        this.scheduleValidation();
+    }
+
+    // Generate waypoints from sample points.
+    // P1: instead of a blind offset along the (camera-derived) normal, each
+    // hover point is solved from the real surface normal with a cap search that
+    // only accepts candidates satisfying the hard clearance and keeping sight of
+    // their target. Points with no safe solution are skipped and reported.
+    private async generateRoute(points: { position: Vec3; normal: Vec3 }[]) {
         this.clearRoute();
 
         if (!this.root || points.length === 0) return;
 
         const { scene } = this;
-        const device = scene.graphicsDevice;
+        const ready = await this.clearance.ensureBuilt(scene);
+
+        // the tool or scene may have gone away while the field was building
+        if (!this.root) return;
+
         const routeEntity = new Entity('sampleRoute');
 
         // size for waypoint markers (same scale logic as sample points)
@@ -508,21 +860,33 @@ class SamplePointTool {
         const wpRadius = Math.max(sceneRadius * 0.002 / 3, 0.0005 / 3);
         const wpScale = wpRadius * 2;
 
-        // offset distance along the surface normal (2.2 m)
-        const offset = 2.2;
-
-        const hoverPositions: Vec3[] = [];
         const waypointData: { position: Vec3; markerEntity: Entity }[] = [];
+        const unsolvable: number[] = [];
 
-        for (const point of points) {
-            const hoverPos = new Vec3(
-                point.position.x + point.normal.x * offset,
-                point.position.y + point.normal.y * offset,
-                point.position.z + point.normal.z * offset
-            );
-            hoverPositions.push(hoverPos);
+        for (let i = 0; i < points.length; i++) {
+            const point = points[i];
 
-            // waypoint marker (blue sphere)
+            let hoverPos: Vec3;
+            if (ready) {
+                const solved = solveHoverPoint(this.clearance, point.position, point.normal, this.clearance.config);
+                if (!solved.ok) {
+                    // no safe hover point exists: skip it rather than emitting a
+                    // waypoint that would fly into the model
+                    unsolvable.push(i);
+                    continue;
+                }
+                hoverPos = solved.position;
+            } else {
+                // no obstacle field: fall back to the plain normal offset
+                const offset = this.clearance.config.hoverDistance;
+                hoverPos = new Vec3(
+                    point.position.x + point.normal.x * offset,
+                    point.position.y + point.normal.y * offset,
+                    point.position.z + point.normal.z * offset
+                );
+            }
+
+            // waypoint marker (colour is set by the safety validation)
             const wp = new Entity('waypoint');
             wp.addComponent('render', { type: 'sphere' });
             const mat = new StandardMaterial();
@@ -539,37 +903,26 @@ class SamplePointTool {
             waypointData.push({ position: hoverPos.clone(), markerEntity: wp });
         }
 
-        // create route line connecting all waypoints
-        if (hoverPositions.length >= 2) {
-            const positions: number[] = [];
-            for (const pos of hoverPositions) {
-                positions.push(pos.x, pos.y, pos.z);
-            }
-
-            const mesh = new Mesh(device);
-            mesh.setPositions(positions);
-            mesh.update(PRIMITIVE_LINESTRIP);
-            this.routeMesh = mesh;
-
-            const lineMat = new StandardMaterial();
-            lineMat.diffuse = new Color(0, 0.5, 1);
-            lineMat.emissive = new Color(0, 0.5, 1);
-            lineMat.metalness = 0;
-            lineMat.update();
-
-            const meshInstance = new MeshInstance(mesh, lineMat);
-            const lineEntity = new Entity('routeLine');
-            lineEntity.addComponent('render', { meshInstances: [meshInstance] });
-            lineEntity.render.layers = [scene.worldLayer.id];
-            routeEntity.addChild(lineEntity);
-        }
-
         scene.app.root.addChild(routeEntity);
         this.routeEntity = routeEntity;
+
+        // container for the per-waypoint distance indicators
+        const distEntity = new Entity('sampleDistances');
+        scene.app.root.addChild(distEntity);
+        this.distEntity = distEntity;
+
         scene.forceRender = true;
 
         // notify listeners (panel) of the generated waypoints
         this.events.fire('route.generated', waypointData);
+        if (unsolvable.length > 0) {
+            // eslint-disable-next-line no-console
+            console.warn(`[SamplePoint] ${unsolvable.length} 个采样点找不到安全悬停点，已跳过：索引 ${unsolvable.join(', ')}`);
+            this.events.fire('route.unsolvable', unsolvable);
+        }
+
+        // plan, draw and measure the route
+        this.updateRouteLine();
     }
 }
 

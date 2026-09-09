@@ -149,12 +149,39 @@
 }
 
 // ── point item ──
+.sample-point-empty-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 4px;
+    cursor: pointer;
+
+    .sample-point-empty-row-label {
+        color: $text-dark;
+        font-size: 10px;
+
+        &:hover {
+            color: $clr-hilight;
+        }
+    }
+
+    &:hover {
+        background-color: $bcg-darker;
+
+        .sample-point-empty-row-label {
+            color: $clr-hilight;
+        }
+    }
+}
+
 .sample-point-item {
     display: flex;
     flex-direction: row;
     align-items: center;
     padding: 2px 4px 2px 20px;
     border-bottom: 1px solid rgba(0, 0, 0, 0.2);
+    cursor: pointer;
 
     &:last-child {
         border-bottom: none;
@@ -194,6 +221,7 @@
         padding: 0 4px;
     }
 
+    .sample-point-insert,
     .sample-point-delete {
         width: 18px;
         height: 18px;
@@ -210,10 +238,31 @@
         &:hover {
             background-color: $bcg-dark;
             cursor: pointer;
+        }
+    }
 
+    .sample-point-insert {
+        &:hover {
+            svg {
+                color: #6ad06a;
+            }
+        }
+    }
+
+    .sample-point-delete {
+        &:hover {
             svg {
                 color: $error;
             }
+        }
+    }
+
+    // row highlighted while adding points: the next point goes before this one
+    &.insert-hint {
+        background-color: rgba(106, 208, 106, 0.12);
+
+        .sample-point-name {
+            color: #6ad06a;
         }
     }
 }
@@ -251,6 +300,7 @@
         padding: 0 4px;
     }
 
+    .sample-waypoint-validate,
     .sample-waypoint-delete {
         width: 18px;
         height: 18px;
@@ -267,7 +317,19 @@
         &:hover {
             background-color: $bcg-darkest;
             cursor: pointer;
+        }
+    }
 
+    .sample-waypoint-validate {
+        &:hover {
+            svg {
+                color: #6ad06a;
+            }
+        }
+    }
+
+    .sample-waypoint-delete {
+        &:hover {
             svg {
                 color: $error;
             }
@@ -279,11 +341,21 @@
     padding: 0;
 }
 
+// hint shown when the sample point order changed after the route was generated
+.sample-waypoint-stale {
+    display: block;
+    padding: 3px 4px 3px 28px;
+    font-size: 10px;
+    color: #ffcc00;
+    background-color: $bcg-darkest;
+}
+
 .sample-waypoint-row {
     display: flex;
     flex-direction: row;
     align-items: center;
     padding: 2px 4px 2px 28px;
+    cursor: pointer;
 
     &:hover {
         background-color: $bcg-darker;
@@ -292,5 +364,75 @@
     .sample-point-name {
         color: #4da6ff;
         font-size: 11px;
+        flex-shrink: 0;
+    }
+
+    // line segment visualising the measured clearance (0 → 2× hardClearance,
+    // the white tick marks the hard constraint)
+    .sample-wp-bar {
+        position: relative;
+        flex-grow: 1;
+        height: 5px;
+        min-width: 36px;
+        margin: 0 6px;
+        align-self: center;
+        border-radius: 3px;
+        background-color: rgba(255, 255, 255, 0.08);
+        overflow: visible;
+
+        .sample-wp-bar-fill {
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 0%;
+            border-radius: 3px;
+            background-color: #4da6ff;
+            transition: width 0.15s ease;
+
+            &.danger {
+                background-color: $error;
+            }
+        }
+
+        .sample-wp-bar-tick {
+            position: absolute;
+            left: 50%;
+            top: -2px;
+            bottom: -2px;
+            width: 1px;
+            background-color: rgba(255, 255, 255, 0.45);
+        }
+    }
+
+    // measured clearance of this waypoint
+    .sample-wp-clearance {
+        font-size: 10px;
+        flex-shrink: 0;
+        width: 48px;
+        text-align: right;
+        padding: 0 4px 0 0;
+        color: $text-dark;
+
+        &.danger {
+            color: $error;
+        }
+    }
+
+    &.danger .sample-point-name {
+        color: $error;
+    }
+}
+
+// safety summary line under the waypoint list
+.sample-waypoint-summary {
+    display: block;
+    padding: 3px 4px 3px 28px;
+    font-size: 10px;
+    color: $text-dark;
+    background-color: $bcg-darkest;
+
+    &.danger {
+        color: $error;
     }
 }

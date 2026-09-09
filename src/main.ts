@@ -12,6 +12,7 @@ import { registerIframeApi } from './iframe-api';
 import { registerPreferences } from './preferences';
 import { registerPublishEvents } from './publish';
 import { registerRenderEvents } from './render';
+import { ClearanceField } from './route/clearance-field';
 import { Scene } from './scene';
 import { getSceneConfig } from './scene-config';
 import { registerSelectionEvents } from './selection';
@@ -238,6 +239,9 @@ const main = async () => {
         context: maskContext
     };
 
+    // obstacle field backing the drone route safety checks
+    const clearanceField = new ClearanceField();
+
     // tool manager
     const toolManager = new ToolManager(events);
     toolManager.register('rectSelection', new RectSelection(events, editorUI.toolsContainer.dom));
@@ -252,7 +256,7 @@ const main = async () => {
     toolManager.register('rotate', new RotateTool(events, scene));
     toolManager.register('scale', new ScaleTool(events, scene));
     toolManager.register('measure', new MeasureTool(events, scene, editorUI.canvasContainer));
-    toolManager.register('samplePoint', new SamplePointTool(events, scene, editorUI.canvasContainer.dom));
+    toolManager.register('samplePoint', new SamplePointTool(events, scene, editorUI.canvasContainer.dom, clearanceField));
     toolManager.register('orient', new OrientTool(events, scene, editorUI.toolsContainer.dom, editorUI.canvasContainer));
 
     const boundDimensionsOverlay = new BoundDimensionsOverlay(events, scene, editorUI.canvasContainer);
@@ -299,6 +303,16 @@ const main = async () => {
     events.on('samplePoint.forceRender', () => {
         scene.forceRender = true;
     });
+
+    // ── the obstacle field is stale whenever the splats change ──
+    const invalidateClearance = () => clearanceField.invalidate();
+    events.on('scene.clear', invalidateClearance);
+    events.on('scene.elementAdded', invalidateClearance);
+    events.on('scene.elementRemoved', invalidateClearance);
+    events.on('splat.stateChanged', invalidateClearance);
+    events.on('splat.moved', invalidateClearance);
+    events.on('splat.replaced', invalidateClearance);
+    events.on('splat.positionsChanged', invalidateClearance);
 
     // apply stored user preferences and start capturing changes to them.
     // registered after the boot-time initialization events above so they are
