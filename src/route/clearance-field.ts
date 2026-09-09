@@ -40,7 +40,8 @@ const probeB = new Vec3();
 class ClearanceField {
     config: SafetyConfig;
 
-    private version = '';
+    // fingerprint of the obstacle data the current index was built from
+    private builtVersion = '';
     private index = new VoxelIndex();
     private buildPromise: Promise<boolean> | null = null;
 
@@ -61,13 +62,19 @@ class ClearanceField {
         return this.index.built;
     }
 
+    // fingerprint of the obstacle data the current index was built from.
+    // consumers can watch this to know when cached results must be dropped.
+    get version() {
+        return this.builtVersion;
+    }
+
     get voxelSize() {
         return this.index.cellSize;
     }
 
     // the field is stale as soon as the splats move, change or are deleted
     invalidate() {
-        this.version = '';
+        this.builtVersion = '';
         this.index.reset();
     }
 
@@ -94,7 +101,7 @@ class ClearanceField {
 
     private async build(scene: Scene): Promise<boolean> {
         const version = obstacleVersion(scene);
-        if (this.index.built && version === this.version) {
+        if (this.index.built && version === this.builtVersion) {
             return true;
         }
 
@@ -105,7 +112,7 @@ class ClearanceField {
         }
 
         this.index.build(cloud.positions, cloud.count, this.config.voxelSize, this.config.maxCells);
-        this.version = version;
+        this.builtVersion = version;
 
         return this.index.built;
     }

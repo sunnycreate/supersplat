@@ -21,6 +21,20 @@ const tmpScreen = new Vec3();
 const tmpWorld = new Vec3();
 const tmpDir = new Vec3();
 
+// planned result for one leg of the route
+interface LegPlan {
+    // intermediate points making the leg safe; null when the straight leg is
+    // already safe, empty when no safe path was found
+    detour: Vec3[] | null;
+    // worst clearance along the leg
+    clearance: number;
+    // where that worst clearance occurs
+    point: Vec3;
+}
+
+// upper bound on cached legs before the oldest are dropped
+const LEG_CACHE_LIMIT = 512;
+
 // payload the panel needs to create (or restore) a row for a marker
 interface SamplePointCreatedData {
     position: Vec3;
@@ -126,6 +140,10 @@ class SamplePointTool {
     // set while a validation is running; a queued flag re-runs it afterwards
     private validating = false;
     private validationQueued = false;
+    // leg plans keyed by their endpoints (see getLegPlan)
+    private legCache = new Map<string, LegPlan>();
+    // obstacle field version the cache was built against
+    private cachedFieldVersion = '';
     // when true, surface clicks don't create new markers; waypoint dragging is enabled
     private routeEditMode = false;
     private active = false;
@@ -321,6 +339,8 @@ class SamplePointTool {
         // re-measure the route on demand (e.g. the panel's validate button)
         events.on('route.safety.request', () => {
             this.clearance.invalidate();
+            this.legCache.clear();
+            this.cachedFieldVersion = '';
             this.scheduleValidation();
         });
     }
@@ -574,6 +594,7 @@ class SamplePointTool {
     private clearRoute() {
         this.deselectMarker();
         this.markerLevels.clear();
+        this.legCache.clear();
         this.disposeLine(this.routeLine);
         this.disposeLine(this.distLine);
         this.disposeLine(this.distLineDanger);
@@ -653,6 +674,58 @@ class SamplePointTool {
 
     // ── route planning + validation ──
 
+    // plan a single leg: detour waypoints (null when it stays straight) plus the
+    // measured worst clearance along the resulting polyline
+    private planLeg(a: Vec3, b: Vec3): LegPlan {
+        const detour = planDetour(this.clearance, a, b, this.clearance.config);
+
+        const leg: Vec3[] = [a.clone()];
+        if (detour) {
+            for (const p of detour) {
+                leg.push(p.clone());
+            }
+        }
+        leg.push(b.clone());
+
+        let min = Infinity;
+        let minPoint = a;
+        for (let k = 0; k < leg.length - 1; k++) {
+            const result = this.clearance.segmentMinClearance(leg[k], leg[k + 1]);
+            if (result.clearance >= 0 && result.clearance < min) {
+                min = result.clearance;
+                minPoint = result.point;
+            }
+        }
+
+        return {
+            detour: detour ? detour.map(p => p.clone()) : null,
+            clearance: min === Infinity ? -1 : min,
+            point: minPoint.clone()
+        };
+    }
+
+    // cached leg lookup — this is what keeps dragging responsive: only the two
+    // legs touching the moved waypoint miss the cache
+    private getLegPlan(a: Vec3, b: Vec3): LegPlan {
+        const key = `${a.x.toFixed(3)},${a.y.toFixed(3)},${a.z.toFixed(3)}|${b.x.toFixed(3)},${b.y.toFixed(3)},${b.z.toFixed(3)}`;
+
+        const cached = this.legCache.get(key);
+        if (cached) return cached;
+
+        const plan = this.planLeg(a, b);
+        this.legCache.set(key, plan);
+
+        // bound the cache (Map preserves insertion order, so the front is oldest)
+        if (this.legCache.size > LEG_CACHE_LIMIT) {
+            const keys = [...this.legCache.keys()].slice(0, LEG_CACHE_LIMIT >> 1);
+            for (const k of keys) {
+                this.legCache.delete(k);
+            }
+        }
+
+        return plan;
+    }
+
     // request a re-plan; collapses bursts into a single pending run
     private scheduleValidation() {
         if (this.validating) {
@@ -673,6 +746,12 @@ class SamplePointTool {
 
         try {
             const ready = await this.clearance.ensureBuilt(this.scene);
+
+            // a rebuilt obstacle field invalidates every cached leg
+            if (this.clearance.version !== this.cachedFieldVersion) {
+                this.cachedFieldVersion = this.clearance.version;
+                this.legCache.clear();
+            }
 
             // the route may have been cleared while the field was building
             if (!this.routeEntity) return;
@@ -707,7 +786,9 @@ class SamplePointTool {
                 report.waypoints.push({ entity: wp.entity, clearance, level });
             }
 
-            // plan each leg; the polyline we draw follows the safe path
+            // plan each leg; the polyline we draw follows the safe path.
+            // results are cached by endpoints, so moving one waypoint only
+            // re-plans the two legs that actually changed
             const path: Vec3[] = [];
             for (let i = 0; i < waypoints.length; i++) {
                 const a = waypoints[i].position;
@@ -716,24 +797,11 @@ class SamplePointTool {
                 if (i === waypoints.length - 1) break;
 
                 const b = waypoints[i + 1].position;
-                const detour = planDetour(this.clearance, a, b, this.clearance.config);
+                const plan = this.getLegPlan(a, b);
 
-                const leg: Vec3[] = [a.clone()];
-                if (detour) {
-                    for (const p of detour) {
-                        leg.push(p.clone());
+                if (plan.detour) {
+                    for (const p of plan.detour) {
                         path.push(p.clone());
-                    }
-                }
-                leg.push(b.clone());
-
-                let min = Infinity;
-                let minPoint = a;
-                for (let k = 0; k < leg.length - 1; k++) {
-                    const result = this.clearance.segmentMinClearance(leg[k], leg[k + 1]);
-                    if (result.clearance >= 0 && result.clearance < min) {
-                        min = result.clearance;
-                        minPoint = result.point;
                     }
                 }
 
@@ -741,9 +809,9 @@ class SamplePointTool {
                 // the waypoints carry the safety gate
                 report.segments.push({
                     index: i,
-                    clearance: min === Infinity ? -1 : min,
+                    clearance: plan.clearance,
                     level: SafetyLevel.safe,
-                    point: minPoint.clone()
+                    point: plan.point.clone()
                 });
             }
 

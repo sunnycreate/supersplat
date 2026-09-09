@@ -325,7 +325,7 @@ hardClearance = droneRadius + safetyMargin
 | P3 | 起降/巡航垂直分层：巡航安全高度、垂直进近点、垂直下降拍照 | 待做 |
 | P4 | 导出前全量复检 + 安全报告 + 不通过禁止导出 | 待做 |
 | P5 | 参数持久化到 `.ssproj`、参数面板 UI | 待做 |
-| P6 | 障碍场构建移入 Web Worker（需引入 rollup worker 插件） | 待做 |
+| P6 | 交互性能优化：航段增量重算 + 绕行结果缓存 + 规划异步化（Worker 收益有限，已降级） | 待做 |
 | P7 | 规划算法测试正式化（`tests/` + `npm run test:route`） | 待做 |
 
 ---
