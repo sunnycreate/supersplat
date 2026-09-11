@@ -9,6 +9,7 @@ import { i18n } from './localization';
 import { MenuPanel } from './menu-panel';
 import { Tooltips } from './tooltips';
 import deleteSvg from './svg/delete.svg';
+import exportSvg from './svg/export.svg';
 import folderNewSvg from './svg/folder-new.svg';
 import folderSvg from './svg/folder.svg';
 import routeSvg from './svg/route.svg';
@@ -463,6 +464,16 @@ class SamplePointPanel extends Container {
             this.setFolderAddingState(this.activeFolderId, false);
         }
 
+        // adding points cancels route editing (unlights its button). must run
+        // before activeFolderId is set: stopRouteEditing fires tool.move, whose
+        // tool.activated handler calls stopAddingPoints() when a folder is in
+        // adding mode, which would cancel the mode we are about to enter
+        for (const folder of this.folders) {
+            if (folder.routeActive) {
+                this.stopRouteEditing(folder.id);
+            }
+        }
+
         this.activeFolderId = folderId;
         this.setFolderAddingState(folderId, true);
         this.setInsertHint(insertIndex);
@@ -636,7 +647,7 @@ class SamplePointPanel extends Container {
 
         // point info (WGS84 or scene coords)
         const infoText = point.wgs84
-            ? `lat:${point.wgs84.lat.toFixed(6)}, lon:${point.wgs84.lon.toFixed(6)}, alt:${point.wgs84.alt.toFixed(1)}`
+            ? `lat:${point.wgs84.lat.toFixed(4)}, lon:${point.wgs84.lon.toFixed(4)}, alt:${point.wgs84.alt.toFixed(1)}`
             : `(${point.position.x.toFixed(1)}, ${point.position.y.toFixed(1)}, ${point.position.z.toFixed(1)})`;
         const info = new Label({
             class: 'sample-point-info',
@@ -898,12 +909,16 @@ class SamplePointPanel extends Container {
         });
         const wpValidateBtn = new Container({ class: 'sample-waypoint-validate' });
         wpValidateBtn.dom.appendChild(createSvg(shieldSvg));
+        // export the waypoint list (lon/lat/alt) to the console
+        const wpExportBtn = new Container({ class: 'sample-waypoint-export' });
+        wpExportBtn.dom.appendChild(createSvg(exportSvg));
         const wpDeleteBtn = new Container({ class: 'sample-waypoint-delete' });
         wpDeleteBtn.dom.appendChild(createSvg(deleteSvg));
 
         wpHeader.append(wpIcon);
         wpHeader.append(wpName);
         wpHeader.append(wpValidateBtn);
+        wpHeader.append(wpExportBtn);
         wpHeader.append(wpDeleteBtn);
         section.append(wpHeader);
 
@@ -975,8 +990,19 @@ class SamplePointPanel extends Container {
             this.events.fire('route.safety.request');
         });
 
+        // export the folder's waypoint list to the console; the tool prefers the
+        // live marker positions (drag-aware) and converts them to WGS84
+        wpExportBtn.on('click', () => {
+            this.events.fire('waypoint.export', folder.waypoints.map(wp => ({
+                name: wp.name,
+                position: wp.position,
+                markerEntity: wp.markerEntity
+            })));
+        });
+
         this.tooltips.register(wpDeleteBtn, () => i18n.t('tooltip.samplePoint.deleteFolder'), 'left');
         this.tooltips.register(wpValidateBtn, () => '安全校验：测量航点与航线到模型的距离', 'left');
+        this.tooltips.register(wpExportBtn, () => '导出航点信息', 'left');
 
         // render whatever has already been measured
         if (this.safetyReport) {

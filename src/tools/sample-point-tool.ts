@@ -343,6 +343,11 @@ class SamplePointTool {
             this.cachedFieldVersion = '';
             this.scheduleValidation();
         });
+
+        // export the waypoint list (lon/lat/alt) to the console (panel button)
+        events.on('waypoint.export', (waypoints: { name: string; position: Vec3; markerEntity: Entity }[]) => {
+            this.exportWaypoints(waypoints);
+        });
     }
 
     // build a yellow sphere entity (not yet added to the scene)
@@ -516,6 +521,47 @@ class SamplePointTool {
         );
 
         return { lat, lon, alt: projZ };
+    }
+
+    // log the waypoint list to the console, each entry with its WGS84
+    // lon/lat/alt. positions prefer the live (possibly dragged) marker
+    // position, falling back to the generation-time position.
+    private exportWaypoints(waypoints: { name: string; position: Vec3; markerEntity: Entity }[]) {
+        if (waypoints.length === 0) {
+            // eslint-disable-next-line no-console
+            console.log('[Waypoint] 没有可导出的航点');
+            return;
+        }
+
+        // live marker positions keyed by entity (drag-aware)
+        const live = new Map<Entity, Vec3>();
+        for (const wp of this.waypointPositions()) {
+            live.set(wp.entity, wp.position);
+        }
+
+        const rows = waypoints.map((wp, i) => {
+            const position = live.get(wp.markerEntity) ?? wp.position;
+            const wgs84 = this.sceneToWgs84(position);
+            return {
+                index: i + 1,
+                name: wp.name,
+                lon: wgs84 ? +wgs84.lon.toFixed(8) : null,
+                lat: wgs84 ? +wgs84.lat.toFixed(8) : null,
+                alt: wgs84 ? +wgs84.alt.toFixed(3) : null
+            };
+        });
+
+        // eslint-disable-next-line no-console
+        console.log(`[Waypoint] 航点列表（共 ${rows.length} 个）:`);
+        for (const row of rows) {
+            const coord = row.lon === null
+                ? '无地理元数据（场景坐标不可导出 lon/lat/alt）'
+                : `lon=${row.lon}, lat=${row.lat}, alt=${row.alt}`;
+            // eslint-disable-next-line no-console
+            console.log(`[Waypoint] ${row.name}: ${coord}`);
+        }
+        // eslint-disable-next-line no-console
+        console.log('[Waypoint] export:', rows);
     }
 
     private selectMarker(marker: Entity) {

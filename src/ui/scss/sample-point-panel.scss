@@ -301,6 +301,7 @@
     }
 
     .sample-waypoint-validate,
+    .sample-waypoint-export,
     .sample-waypoint-delete {
         width: 18px;
         height: 18px;
@@ -324,6 +325,14 @@
         &:hover {
             svg {
                 color: #6ad06a;
+            }
+        }
+    }
+
+    .sample-waypoint-export {
+        &:hover {
+            svg {
+                color: #4da6ff;
             }
         }
     }
