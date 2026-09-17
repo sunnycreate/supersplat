@@ -6,6 +6,11 @@
     width: 320px;
 }
 
+// pcui 'hidden' only toggles the pcui-hidden class
+#scene-panel.pcui-hidden {
+    display: none;
+}
+
 .collapsed #scene-panel {
     display: none;
 }

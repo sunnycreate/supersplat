@@ -47,6 +47,7 @@
     "panel.mode.centers": "センターモード",
     "panel.mode.rings": "リングモード",
 
+    "panel.device-ledger": "設備台帳",
     "panel.scene": "シーンマネージャー",
     "panel.scene.transform": "トランスフォーム",
     "panel.scene.transform.position": "位置",
@@ -309,6 +310,9 @@
     "tooltip.right-toolbar.fly-camera": "フライカメラ",
     "tooltip.right-toolbar.frame-selection": "選択をフレームイン",
     "tooltip.right-toolbar.reset-camera": "カメラをリセット",
+    "tooltip.right-toolbar.device-ledger": "設備台帳",
+    "tooltip.right-toolbar.scene-manager": "シーン管理",
+    "tooltip.right-toolbar.sample-point": "サンプルポイントとルート",
     "tooltip.right-toolbar.colors": "色",
     "tooltip.right-toolbar.settings": "設定",
 

@@ -120,6 +120,26 @@ class ScenePanel extends Container {
             class: 'panel-header',
             height: 20
         }));
+
+        // ── handle panel visibility (toggled from the right toolbar) ──
+        const setVisible = (visible: boolean) => {
+            if (visible === this.hidden) {
+                this.hidden = !visible;
+                events.fire('scenePanel.visible', visible);
+            }
+        };
+
+        events.function('scenePanel.visible', () => {
+            return !this.hidden;
+        });
+
+        events.on('scenePanel.setVisible', (visible: boolean) => {
+            setVisible(visible);
+        });
+
+        events.on('scenePanel.toggleVisible', () => {
+            setVisible(this.hidden);
+        });
     }
 }
 

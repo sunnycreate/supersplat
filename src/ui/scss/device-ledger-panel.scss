@@ -1,0 +1,18 @@
+@use 'colors.scss' as *;
+
+#device-ledger-panel {
+    top: 102px;
+    left: 24px;
+    width: 320px;
+    flex-direction: column;
+
+    // pcui 'hidden' only toggles the pcui-hidden class, so display must be
+    // opt-in instead of overridden
+    &:not(.pcui-hidden) {
+        display: flex;
+    }
+}
+
+#device-ledger-body {
+    min-height: 120px;
+}

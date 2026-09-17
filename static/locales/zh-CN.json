@@ -47,6 +47,7 @@
     "panel.mode.centers": "中心模式",
     "panel.mode.rings": "环模式",
 
+    "panel.device-ledger": "设备台账",
     "panel.scene": "场景管理器",
     "panel.scene.transform": "变换",
     "panel.scene.transform.position": "位置",
@@ -310,6 +311,9 @@
     "tooltip.right-toolbar.fly-camera": "飞行相机",
     "tooltip.right-toolbar.frame-selection": "框显所选",
     "tooltip.right-toolbar.reset-camera": "重置相机",
+    "tooltip.right-toolbar.device-ledger": "设备台账",
+    "tooltip.right-toolbar.scene-manager": "场景管理",
+    "tooltip.right-toolbar.sample-point": "采样点及航线",
     "tooltip.right-toolbar.colors": "颜色",
     "tooltip.right-toolbar.settings": "设置",
 

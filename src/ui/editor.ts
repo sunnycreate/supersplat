@@ -7,6 +7,7 @@ import { AboutPopup } from './about-popup';
 import { BottomToolbar } from './bottom-toolbar';
 import { CameraInfoOverlay } from './camera-info-overlay';
 import { ColorPanel } from './color-panel';
+import { DeviceLedgerPanel } from './device-ledger-panel';
 import { ExportPopup } from './export-popup';
 import { ImageSettingsDialog } from './image-settings-dialog';
 import { i18n } from './localization';
@@ -96,6 +97,7 @@ class EditorUI {
 
         // bottom toolbar
         const scenePanel = new ScenePanel(events, tooltips);
+        const deviceLedgerPanel = new DeviceLedgerPanel(events, tooltips);
         const samplePointPanel = new SamplePointPanel(events, tooltips);
         const settingsPanel = new SettingsPanel(events, tooltips);
         const colorPanel = new ColorPanel(events, tooltips);
@@ -108,11 +110,31 @@ class EditorUI {
         this.samplePointPanel = samplePointPanel;
         this.scenePanelDom = scenePanel.dom;
 
+        // the three panels are mutually exclusive: showing one hides the others
+        const exclusivePanels: Array<[string, Container]> = [
+            ['devicePanel', deviceLedgerPanel],
+            ['samplePointPanel', samplePointPanel],
+            ['scenePanel', scenePanel]
+        ];
+        for (const [name, panel] of exclusivePanels) {
+            events.on(`${name}.visible`, (visible: boolean) => {
+                if (!visible) {
+                    return;
+                }
+                for (const [otherName, other] of exclusivePanels) {
+                    if (other !== panel) {
+                        events.fire(`${otherName}.setVisible`, false);
+                    }
+                }
+            });
+        }
+
         canvasContainer.dom.appendChild(canvas);
         canvasContainer.append(appLabel);
         canvasContainer.append(cameraInfoOverlay);
         canvasContainer.append(toolsContainer);
         canvasContainer.append(scenePanel);
+        canvasContainer.append(deviceLedgerPanel);
         canvasContainer.append(samplePointPanel);
         canvasContainer.append(settingsPanel);
         canvasContainer.append(colorPanel);

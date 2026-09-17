@@ -52,6 +52,17 @@
         background-color: $bcg-lighter;
     }
 
+    &>.right-toolbar-group {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+
+        svg {
+            width: 20px;
+            height: 20px;
+        }
+    }
+
     &>.right-toolbar-button {
         svg {
             color: $clr-default;
@@ -83,7 +94,7 @@
         }
     }
 
-    &>.right-toolbar-toggle.active {
+    .right-toolbar-toggle.active {
         // highlight icon
         &::before {
             color: $clr-hilight;

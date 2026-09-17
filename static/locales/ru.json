@@ -47,6 +47,7 @@
     "panel.mode.centers": "Режим центров",
     "panel.mode.rings": "Режим колец",
 
+    "panel.device-ledger": "Реестр оборудования",
     "panel.scene": "Менеджер сцены",
     "panel.scene.transform": "Трансформация",
     "panel.scene.transform.position": "Позиция",
@@ -309,6 +310,9 @@
     "tooltip.right-toolbar.fly-camera": "Камера полёта",
     "tooltip.right-toolbar.frame-selection": "Обрамить выделение",
     "tooltip.right-toolbar.reset-camera": "Сбросить камеру",
+    "tooltip.right-toolbar.device-ledger": "Реестр оборудования",
+    "tooltip.right-toolbar.scene-manager": "Управление сценой",
+    "tooltip.right-toolbar.sample-point": "Точки и маршрут",
     "tooltip.right-toolbar.colors": "Цвета",
     "tooltip.right-toolbar.settings": "Настройки",
 

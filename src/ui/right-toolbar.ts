@@ -7,9 +7,12 @@ import cameraFrameSelectionSvg from './svg/camera-frame-selection.svg';
 import cameraResetSvg from './svg/camera-reset.svg';
 import centersSvg from './svg/centers.svg';
 import colorPanelSvg from './svg/color-panel.svg';
+import deviceLedgerSvg from './svg/device-ledger.svg';
 import flyCameraSvg from './svg/fly-camera.svg';
 import orbitCameraSvg from './svg/orbit-camera.svg';
 import ringsSvg from './svg/rings.svg';
+import routeSvg from './svg/route.svg';
+import sceneManagerSvg from './svg/scene-manager.svg';
 import showHideSplatsSvg from './svg/show-hide-splats.svg';
 import { Tooltips } from './tooltips';
 
@@ -66,6 +69,31 @@ class RightToolbar extends Container {
             class: 'right-toolbar-toggle'
         });
 
+        // group of mutually-exclusive panel toggles: device ledger,
+        // sample points & route, scene manager
+        const panelGroup = new Container({ class: 'right-toolbar-group' });
+        const deviceLedger = new Button({
+            id: 'right-toolbar-device-ledger',
+            class: 'right-toolbar-toggle'
+        });
+        deviceLedger.dom.appendChild(createSvg(deviceLedgerSvg));
+
+        const samplePoint = new Button({
+            id: 'right-toolbar-sample-point',
+            class: 'right-toolbar-toggle'
+        });
+        samplePoint.dom.appendChild(createSvg(routeSvg));
+
+        const sceneManager = new Button({
+            id: 'right-toolbar-scene-manager',
+            class: ['right-toolbar-toggle', 'active']   // scene panel starts visible
+        });
+        sceneManager.dom.appendChild(createSvg(sceneManagerSvg));
+
+        panelGroup.append(deviceLedger);
+        panelGroup.append(samplePoint);
+        panelGroup.append(sceneManager);
+
         const options = new Button({
             id: 'right-toolbar-options',
             class: 'right-toolbar-toggle',
@@ -94,6 +122,8 @@ class RightToolbar extends Container {
         this.append(cameraFrameSelection);
         this.append(cameraReset);
         this.append(new Element({ class: 'right-toolbar-separator' }));
+        this.append(panelGroup);
+        this.append(new Element({ class: 'right-toolbar-separator' }));
         this.append(colorPanel);
         this.append(options);
 
@@ -116,6 +146,9 @@ class RightToolbar extends Container {
         tooltips.register(flyMode, tooltip('tooltip.right-toolbar.fly-camera', 'camera.toggleControlMode'), 'left');
         tooltips.register(cameraFrameSelection, tooltip('tooltip.right-toolbar.frame-selection', 'camera.focus'), 'left');
         tooltips.register(cameraReset, tooltip('tooltip.right-toolbar.reset-camera', 'camera.reset'), 'left');
+        tooltips.register(deviceLedger, tooltip('tooltip.right-toolbar.device-ledger'), 'left');
+        tooltips.register(samplePoint, tooltip('tooltip.right-toolbar.sample-point'), 'left');
+        tooltips.register(sceneManager, tooltip('tooltip.right-toolbar.scene-manager'), 'left');
         tooltips.register(colorPanel, tooltip('tooltip.right-toolbar.colors'), 'left');
         tooltips.register(options, tooltip('tooltip.right-toolbar.settings'), 'left');
 
@@ -130,6 +163,9 @@ class RightToolbar extends Container {
         flyMode.on('click', () => events.fire('camera.setControlMode', 'fly'));
         cameraFrameSelection.on('click', () => events.fire('camera.focus'));
         cameraReset.on('click', () => events.fire('camera.reset'));
+        deviceLedger.on('click', () => events.fire('devicePanel.toggleVisible'));
+        samplePoint.on('click', () => events.fire('samplePointPanel.toggleVisible'));
+        sceneManager.on('click', () => events.fire('scenePanel.toggleVisible'));
         colorPanel.on('click', () => events.fire('colorPanel.toggleVisible'));
         options.on('click', () => events.fire('settingsPanel.toggleVisible'));
 
@@ -146,6 +182,18 @@ class RightToolbar extends Container {
         events.on('camera.controlMode', (mode: 'orbit' | 'fly') => {
             orbitMode.class[mode === 'orbit' ? 'add' : 'remove']('active');
             flyMode.class[mode === 'fly' ? 'add' : 'remove']('active');
+        });
+
+        events.on('devicePanel.visible', (visible: boolean) => {
+            deviceLedger.class[visible ? 'add' : 'remove']('active');
+        });
+
+        events.on('samplePointPanel.visible', (visible: boolean) => {
+            samplePoint.class[visible ? 'add' : 'remove']('active');
+        });
+
+        events.on('scenePanel.visible', (visible: boolean) => {
+            sceneManager.class[visible ? 'add' : 'remove']('active');
         });
 
         events.on('colorPanel.visible', (visible: boolean) => {

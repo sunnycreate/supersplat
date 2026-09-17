@@ -277,11 +277,18 @@ const main = async () => {
     initFileHandler(scene, events, editorUI.appContainer.dom);
 
     // ── sample point panel: position below scene panel ──
+    // the panels are mutually exclusive; when the scene panel is hidden the
+    // sample point panel takes its place (same top as scene-panel.scss)
     const updateSamplePanelPos = () => {
         editorUI.samplePointPanel.updatePosition(editorUI.scenePanelDom);
     };
     updateSamplePanelPos();
     new ResizeObserver(updateSamplePanelPos).observe(editorUI.scenePanelDom);
+    events.on('samplePointPanel.visible', (visible: boolean) => {
+        if (visible) {
+            updateSamplePanelPos();
+        }
+    });
     events.on('scene.elementAdded', updateSamplePanelPos);
     events.on('scene.elementRemoved', updateSamplePanelPos);
     events.on('scene.clear', updateSamplePanelPos);

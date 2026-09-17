@@ -47,6 +47,7 @@
     "panel.mode.centers": "Modo Centros",
     "panel.mode.rings": "Modo Anéis",
 
+    "panel.device-ledger": "Registro de dispositivos",
     "panel.scene": "Gerenciador de Cena",
     "panel.scene.transform": "Transformar",
     "panel.scene.transform.position": "Posição",
@@ -309,6 +310,9 @@
     "tooltip.right-toolbar.fly-camera": "Câmera de Voo",
     "tooltip.right-toolbar.frame-selection": "Selecionar Quadro",
     "tooltip.right-toolbar.reset-camera": "Redefinir Câmera",
+    "tooltip.right-toolbar.device-ledger": "Registro de dispositivos",
+    "tooltip.right-toolbar.scene-manager": "Gerenciamento de cena",
+    "tooltip.right-toolbar.sample-point": "Pontos de amostragem e rota",
     "tooltip.right-toolbar.colors": "Cores",
     "tooltip.right-toolbar.settings": "Configurações",
 

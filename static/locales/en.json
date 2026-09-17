@@ -47,6 +47,7 @@
     "panel.mode.centers": "Centers Mode",
     "panel.mode.rings": "Rings Mode",
 
+    "panel.device-ledger": "Device Ledger",
     "panel.scene": "Scene Manager",
     "panel.scene.transform": "Transform",
     "panel.scene.transform.position": "Position",
@@ -310,6 +311,9 @@
     "tooltip.right-toolbar.fly-camera": "Fly Camera",
     "tooltip.right-toolbar.frame-selection": "Frame Selection",
     "tooltip.right-toolbar.reset-camera": "Reset Camera",
+    "tooltip.right-toolbar.device-ledger": "Device Ledger",
+    "tooltip.right-toolbar.scene-manager": "Scene Manager",
+    "tooltip.right-toolbar.sample-point": "Sample Points & Route",
     "tooltip.right-toolbar.colors": "Colors",
     "tooltip.right-toolbar.settings": "Settings",
 

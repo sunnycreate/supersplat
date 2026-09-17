@@ -47,6 +47,7 @@
     "panel.mode.centers": "센터 모드",
     "panel.mode.rings": "링 모드",
 
+    "panel.device-ledger": "장비 대장",
     "panel.scene": "장면 관리자",
     "panel.scene.transform": "변환",
     "panel.scene.transform.position": "위치",
@@ -309,6 +310,9 @@
     "tooltip.right-toolbar.fly-camera": "플라이 카메라",
     "tooltip.right-toolbar.frame-selection": "프레임 선택",
     "tooltip.right-toolbar.reset-camera": "카메라 재설정",
+    "tooltip.right-toolbar.device-ledger": "장비 대장",
+    "tooltip.right-toolbar.scene-manager": "장면 관리",
+    "tooltip.right-toolbar.sample-point": "샘플 포인트 및 경로",
     "tooltip.right-toolbar.colors": "색상",
     "tooltip.right-toolbar.settings": "설정",
 

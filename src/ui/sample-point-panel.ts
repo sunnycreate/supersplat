@@ -123,6 +123,9 @@ class SamplePointPanel extends Container {
         this.events = events;
         this.tooltips = tooltips;
 
+        // mutually exclusive with the scene panel (initially active)
+        this.hidden = true;
+
         // stop pointer events bubbling
         ['pointerdown', 'pointerup', 'pointermove', 'wheel', 'dblclick'].forEach((eventName) => {
             this.dom.addEventListener(eventName, (event: Event) => event.stopPropagation());
@@ -274,11 +277,36 @@ class SamplePointPanel extends Container {
                 }
             }
         });
+
+        // ── handle panel visibility (toggled from the right toolbar) ──
+        const setVisible = (visible: boolean) => {
+            if (visible === this.hidden) {
+                this.hidden = !visible;
+                events.fire('samplePointPanel.visible', visible);
+            }
+        };
+
+        events.function('samplePointPanel.visible', () => {
+            return !this.hidden;
+        });
+
+        events.on('samplePointPanel.setVisible', (visible: boolean) => {
+            setVisible(visible);
+        });
+
+        events.on('samplePointPanel.toggleVisible', () => {
+            setVisible(this.hidden);
+        });
     }
 
-    // ── position the panel below scene-panel ──
+    // ── position the panel below scene-panel; when the scene panel is hidden
+    // (mutually exclusive panels) take its place instead ──
     updatePosition(scenePanelDom: HTMLElement) {
         const rect = scenePanelDom.getBoundingClientRect();
+        if (rect.height === 0) {
+            this.dom.style.top = '102px';
+            return;
+        }
         this.dom.style.top = `${rect.bottom + 8}px`;
     }
 

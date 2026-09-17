@@ -47,6 +47,7 @@
     "panel.mode.centers": "Mode centres",
     "panel.mode.rings": "Mode anneaux",
 
+    "panel.device-ledger": "Registre des équipements",
     "panel.scene": "Gestionnaire de Scène",
     "panel.scene.transform": "Transformation",
     "panel.scene.transform.position": "Position",
@@ -309,6 +310,9 @@
     "tooltip.right-toolbar.fly-camera": "Caméra de vol",
     "tooltip.right-toolbar.frame-selection": "Cadrer la sélection",
     "tooltip.right-toolbar.reset-camera": "Réinitialiser la caméra",
+    "tooltip.right-toolbar.device-ledger": "Registre des équipements",
+    "tooltip.right-toolbar.scene-manager": "Gestion de scène",
+    "tooltip.right-toolbar.sample-point": "Points d'échantillonnage et itinéraire",
     "tooltip.right-toolbar.colors": "Couleurs",
     "tooltip.right-toolbar.settings": "Paramètres",
 
