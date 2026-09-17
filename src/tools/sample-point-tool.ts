@@ -16,10 +16,19 @@ const CLICK_TOLERANCE = 4;
 // screen-space pick radius for selecting an existing marker (pixels)
 const MARKER_PICK_RADIUS = 12;
 
+// direction chevrons along the route, all relative to the scene extent:
+// spacing between chevrons, included angle between the two arms (degrees),
+// and the length of each arm; the count is capped as a runaway guard
+const ARROW_SPACING = 0.02;     // 箭头间距（场景半径的 1%）
+const ARROW_ANGLE = 60;         // 箭头两条边的夹角（度），新增常量
+const ARROW_ARM = 0.00061;      // 每条边的长度（场景半径的比例）
+const ARROW_MAX_COUNT = 512;   // 数量上限
+
 // temp vectors (module-scope to avoid per-frame allocations)
 const tmpScreen = new Vec3();
 const tmpWorld = new Vec3();
 const tmpDir = new Vec3();
+const tmpSide = new Vec3();
 
 // planned result for one leg of the route
 interface LegPlan {
@@ -135,6 +144,9 @@ class SamplePointTool {
     private distMaterial: StandardMaterial;
     private distDangerMaterial: StandardMaterial;
     private distAnchors: Entity[] = [];
+    // visibility of the distance indicators (green/red lines + anchors),
+    // toggled from the panel and preserved across route regeneration
+    private distIndicatorsVisible = true;
     // measured safety level per waypoint entity (drives its base colour)
     private markerLevels = new Map<Entity, SafetyLevel>();
     // set while a validation is running; a queued flag re-runs it afterwards
@@ -347,6 +359,15 @@ class SamplePointTool {
         // export the waypoint list (lon/lat/alt) to the console (panel button)
         events.on('waypoint.export', (waypoints: { name: string; position: Vec3; markerEntity: Entity }[]) => {
             this.exportWaypoints(waypoints);
+        });
+
+        // show/hide the shortest-distance indicator lines (panel eye button)
+        events.on('route.distIndicators', (visible: boolean) => {
+            this.distIndicatorsVisible = visible;
+            if (this.distEntity) {
+                this.distEntity.enabled = visible;
+            }
+            this.scene.forceRender = true;
         });
     }
 
@@ -882,7 +903,8 @@ class SamplePointTool {
         }
     }
 
-    // draw the route connector through the given polyline
+    // draw the route connector through the given polyline, with "<"-style
+    // chevrons showing the travel direction
     private drawRoute(path: Vec3[]) {
         const positions: number[] = [];
         for (let i = 0; i < path.length - 1; i++) {
@@ -890,7 +912,68 @@ class SamplePointTool {
             const b = path[i + 1];
             positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
         }
+        this.appendRouteChevrons(positions, path);
         this.setRouteLine(positions);
+    }
+
+    // append "<"-style direction chevrons (two line segments each) at regular
+    // spacing along the flight polyline. drawn into the same line batch as the
+    // route, so they share its material, layer and lifecycle.
+    private appendRouteChevrons(positions: number[], path: Vec3[]) {
+        if (path.length < 2) return;
+
+        const sceneRadius = this.scene.bound.halfExtents.length();
+        const spacing = Math.max(sceneRadius * ARROW_SPACING, 1e-4);
+        // chevron geometry: two arms of `armLen` meeting at the tip, swept
+        // back symmetrically by half the included angle around the anchor
+        const armLen = Math.max(sceneRadius * ARROW_ARM, 1e-4);
+        const halfAngle = ARROW_ANGLE * 0.5 * Math.PI / 180;
+        const fwd = armLen * Math.cos(halfAngle);
+        const sideOff = armLen * Math.sin(halfAngle);
+
+        // walk the polyline, dropping a chevron every `spacing` metres; the
+        // leftover distance carries over across segment corners
+        let carry = spacing * 0.5;
+        let placed = 0;
+        for (let i = 0; i < path.length - 1; i++) {
+            const a = path[i];
+            const b = path[i + 1];
+            tmpDir.sub2(b, a);
+            const segLen = tmpDir.length();
+            if (segLen < 1e-9) continue;
+            tmpDir.normalize();
+
+            // side direction for the swept-back arms; degenerate for vertical
+            // segments, where any horizontal axis will do
+            tmpSide.cross(Vec3.UP, tmpDir);
+            if (tmpSide.lengthSq() < 1e-12) {
+                tmpSide.set(1, 0, 0);
+            }
+            tmpSide.normalize();
+
+            const count = segLen >= carry ? Math.floor((segLen - carry) / spacing) + 1 : 0;
+            for (let k = 0; k < count; k++) {
+                const d = carry + k * spacing;
+                const px = a.x + tmpDir.x * d;
+                const py = a.y + tmpDir.y * d;
+                const pz = a.z + tmpDir.z * d;
+                const tx = px + tmpDir.x * fwd;     // tip, ahead of the anchor
+                const ty = py + tmpDir.y * fwd;
+                const tz = pz + tmpDir.z * fwd;
+                const mx = px - tmpDir.x * fwd;     // arm roots, behind it
+                const my = py - tmpDir.y * fwd;
+                const mz = pz - tmpDir.z * fwd;
+                positions.push(
+                    tx, ty, tz,
+                    mx + tmpSide.x * sideOff, my + tmpSide.y * sideOff, mz + tmpSide.z * sideOff,
+                    tx, ty, tz,
+                    mx - tmpSide.x * sideOff, my - tmpSide.y * sideOff, mz - tmpSide.z * sideOff
+                );
+
+                if (++placed >= ARROW_MAX_COUNT) return;
+            }
+            carry = carry + count * spacing - segLen;
+        }
     }
 
     // one line per waypoint from the waypoint to the closest obstacle point,
@@ -1022,6 +1105,7 @@ class SamplePointTool {
 
         // container for the per-waypoint distance indicators
         const distEntity = new Entity('sampleDistances');
+        distEntity.enabled = this.distIndicatorsVisible;
         scene.app.root.addChild(distEntity);
         this.distEntity = distEntity;
 

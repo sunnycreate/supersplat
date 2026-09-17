@@ -12,8 +12,10 @@ import deleteSvg from './svg/delete.svg';
 import exportSvg from './svg/export.svg';
 import folderNewSvg from './svg/folder-new.svg';
 import folderSvg from './svg/folder.svg';
+import hiddenSvg from './svg/hidden.svg';
 import routeSvg from './svg/route.svg';
 import samplePointSvg from './svg/sample-point-small.svg';
+import shownSvg from './svg/shown.svg';
 
 const createSvg = (svgString: string) => {
     let svg = svgString;
@@ -89,6 +91,9 @@ class SamplePointPanel extends Container {
 
     // latest measurement reported by the tool
     private safetyReport: RouteSafetyReport | null = null;
+
+    // visibility of the shortest-distance indicator lines (eye button toggle)
+    private distIndicatorsVisible = true;
 
     // marker → folder it was created in, so an undone point can be restored to
     // the same folder on redo
@@ -912,6 +917,9 @@ class SamplePointPanel extends Container {
         // export the waypoint list (lon/lat/alt) to the console
         const wpExportBtn = new Container({ class: 'sample-waypoint-export' });
         wpExportBtn.dom.appendChild(createSvg(exportSvg));
+        // show/hide the shortest-distance indicator lines
+        const wpDistBtn = new Container({ class: 'sample-waypoint-dist' });
+        wpDistBtn.dom.appendChild(createSvg(this.distIndicatorsVisible ? shownSvg : hiddenSvg));
         const wpDeleteBtn = new Container({ class: 'sample-waypoint-delete' });
         wpDeleteBtn.dom.appendChild(createSvg(deleteSvg));
 
@@ -919,6 +927,7 @@ class SamplePointPanel extends Container {
         wpHeader.append(wpName);
         wpHeader.append(wpValidateBtn);
         wpHeader.append(wpExportBtn);
+        wpHeader.append(wpDistBtn);
         wpHeader.append(wpDeleteBtn);
         section.append(wpHeader);
 
@@ -1000,9 +1009,17 @@ class SamplePointPanel extends Container {
             })));
         });
 
+        // toggle visibility of the shortest-distance indicator lines
+        wpDistBtn.on('click', () => {
+            this.distIndicatorsVisible = !this.distIndicatorsVisible;
+            wpDistBtn.dom.replaceChildren(createSvg(this.distIndicatorsVisible ? shownSvg : hiddenSvg));
+            this.events.fire('route.distIndicators', this.distIndicatorsVisible);
+        });
+
         this.tooltips.register(wpDeleteBtn, () => i18n.t('tooltip.samplePoint.deleteFolder'), 'left');
         this.tooltips.register(wpValidateBtn, () => '安全校验：测量航点与航线到模型的距离', 'left');
         this.tooltips.register(wpExportBtn, () => '导出航点信息', 'left');
+        this.tooltips.register(wpDistBtn, () => '显示/隐藏最短安全距离指示线', 'left');
 
         // render whatever has already been measured
         if (this.safetyReport) {
