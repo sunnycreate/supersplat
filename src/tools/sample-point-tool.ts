@@ -147,6 +147,11 @@ class SamplePointTool {
     // visibility of the distance indicators (green/red lines + anchors),
     // toggled from the panel and preserved across route regeneration
     private distIndicatorsVisible = true;
+
+    // bounding box of the device selected in the ledger panel (orange wireframe)
+    private deviceBoxEntity: Entity | null = null;
+    private deviceBoxMesh: Mesh | null = null;
+    private deviceBoxMaterial: StandardMaterial;
     // measured safety level per waypoint entity (drives its base colour)
     private markerLevels = new Map<Entity, SafetyLevel>();
     // set while a validation is running; a queued flag re-runs it afterwards
@@ -179,6 +184,7 @@ class SamplePointTool {
         this.lineMaterial = this.makeLineMaterial(new Color(0, 0.5, 1));
         this.distMaterial = this.makeLineMaterial(new Color(0.098, 1, 0.137));
         this.distDangerMaterial = this.makeLineMaterial(new Color(1, 0.15, 0.1));
+        this.deviceBoxMaterial = this.makeLineMaterial(new Color(1, 0.55, 0.05));
 
         // translate gizmo for repositioning markers
         this.gizmo = new TranslateGizmo(scene.camera.camera, scene.gizmoLayer);
@@ -361,6 +367,20 @@ class SamplePointTool {
             this.exportWaypoints(waypoints);
         });
 
+        // export ALL current route waypoints without a folder model
+        // (device ledger panel button)
+        events.on('route.export', () => {
+            const list = this.waypointPositions().map((wp, i) => ({
+                name: `WP ${i + 1}`,
+                position: wp.position,
+                markerEntity: wp.entity
+            }));
+            this.exportWaypoints(list);
+        });
+
+        // indicator visibility query, so any panel's eye button stays in sync
+        events.function('route.distIndicators.state', () => this.distIndicatorsVisible);
+
         // show/hide the shortest-distance indicator lines (panel eye button)
         events.on('route.distIndicators', (visible: boolean) => {
             this.distIndicatorsVisible = visible;
@@ -368,6 +388,21 @@ class SamplePointTool {
                 this.distEntity.enabled = visible;
             }
             this.scene.forceRender = true;
+        });
+
+        // draw/hide the bounding box of the device selected in the ledger panel
+        events.on('deviceLedger.select', (data: { name: string; bounding: number[][] }) => {
+            this.showDeviceBox(data.bounding);
+        });
+
+        events.on('deviceLedger.deselect', () => {
+            this.hideDeviceBox();
+        });
+
+        // generate a route from the checked ledger devices' sample points
+        // (projected coords), reusing the sample point panel's pipeline
+        events.on('deviceLedger.generate', (devices: { name: string; samplePoint: number[][] }[]) => {
+            this.generateForDevices(devices);
         });
     }
 
@@ -737,6 +772,137 @@ class SamplePointTool {
     private setRouteLine(positions: number[]) {
         if (!this.routeEntity) return;
         this.setLine(this.routeEntity, this.routeLine, 'routeLine', positions, this.lineMaterial);
+    }
+
+    // ── device bounding box (device ledger panel) ──
+
+    // inverse of sceneToWgs84: EPSG projected coords (easting, northing, alt)
+    // → LCC local pos → scene space. requires geoMeta and at least one splat.
+    private projectedToScene(projX: number, projY: number, projZ: number, splatEntity: Entity): Vec3 {
+        const { offset, shift, scale } = this.scene.geoMeta!;
+        const local = new Vec3(
+            (projX - offset[0] - shift[0]) / scale[0],
+            (projY - offset[1] - shift[1]) / scale[1],
+            (projZ - offset[2] - shift[2]) / scale[2]
+        );
+        return splatEntity.getWorldTransform().transformPoint(local);
+    }
+
+    // draw the 12-edge wireframe of the device bounding box given as 8 corner
+    // points in EPSG projected coordinates (two quads: 0-3 and 4-7)
+    private showDeviceBox(bounding: number[][]) {
+        this.hideDeviceBox();
+
+        const { scene } = this;
+        if (!scene.geoMeta || scene.geoMeta.epsg === 0 || !bounding || bounding.length !== 8) {
+            // eslint-disable-next-line no-console
+            console.warn('[DeviceLedger] 无法绘制包围框：缺少地理元数据或数据格式不正确');
+            return;
+        }
+        const splats = scene.getElementsByType(ElementType.splat);
+        if (splats.length === 0) {
+            return;
+        }
+        const splatEntity = (splats[0] as Splat).entity;
+
+        const corners = bounding.map((p) => this.projectedToScene(p[0], p[1], p[2], splatEntity));
+
+        const edgePairs = [
+            [0, 1], [1, 2], [2, 3], [3, 0],
+            [4, 5], [5, 6], [6, 7], [7, 4],
+            [0, 4], [1, 5], [2, 6], [3, 7]
+        ];
+        const positions: number[] = [];
+        for (const [a, b] of edgePairs) {
+            positions.push(
+                corners[a].x, corners[a].y, corners[a].z,
+                corners[b].x, corners[b].y, corners[b].z
+            );
+        }
+
+        const mesh = new Mesh(scene.graphicsDevice);
+        mesh.setPositions(positions);
+        mesh.update(PRIMITIVE_LINES);
+
+        // overlay layer so the box stays visible through the gaussians
+        const entity = new Entity('deviceBox');
+        entity.addComponent('render', { meshInstances: [new MeshInstance(mesh, this.deviceBoxMaterial)] });
+        entity.render.layers = [scene.overlayLayer.id];
+        scene.app.root.addChild(entity);
+
+        this.deviceBoxEntity = entity;
+        this.deviceBoxMesh = mesh;
+
+        // fly the camera to frame the device (AABB center, half-diagonal radius)
+        const minC = new Vec3(Infinity, Infinity, Infinity);
+        const maxC = new Vec3(-Infinity, -Infinity, -Infinity);
+        for (const c of corners) {
+            minC.x = Math.min(minC.x, c.x);
+            minC.y = Math.min(minC.y, c.y);
+            minC.z = Math.min(minC.z, c.z);
+            maxC.x = Math.max(maxC.x, c.x);
+            maxC.y = Math.max(maxC.y, c.y);
+            maxC.z = Math.max(maxC.z, c.z);
+        }
+        const center = maxC.clone().add(minC).mulScalar(0.5);
+        const halfExtents = maxC.clone().sub(minC).mulScalar(0.5);
+        scene.camera.focus({
+            focalPoint: center,
+            radius: halfExtents.length() * 1.2,
+            speed: 1
+        });
+
+        scene.forceRender = true;
+    }
+
+    private hideDeviceBox() {
+        this.deviceBoxEntity?.destroy();
+        this.deviceBoxMesh?.destroy();
+        this.deviceBoxEntity = null;
+        this.deviceBoxMesh = null;
+        this.scene.forceRender = true;
+    }
+
+    // generate a route from device ledger sample points: convert each device's
+    // projected sample coords to scene space (up-facing hover normals) and run
+    // the same generateRoute pipeline as the sample point panel
+    private generateForDevices(devices: { name: string; samplePoint: number[][] }[]) {
+        const { scene } = this;
+        if (!scene.geoMeta || scene.geoMeta.epsg === 0) {
+            // eslint-disable-next-line no-console
+            console.warn('[DeviceLedger] 无法生成航线：缺少地理元数据');
+            return;
+        }
+        const splats = scene.getElementsByType(ElementType.splat);
+        if (splats.length === 0) {
+            return;
+        }
+        const splatEntity = (splats[0] as Splat).entity;
+
+        const points: { position: Vec3; normal: Vec3 }[] = [];
+        for (const device of devices) {
+            for (const sp of device.samplePoint) {
+                points.push({
+                    position: this.projectedToScene(sp[0], sp[1], sp[2], splatEntity),
+                    normal: new Vec3(0, 1, 0)
+                });
+            }
+        }
+        if (points.length === 0) {
+            // eslint-disable-next-line no-console
+            console.warn('[DeviceLedger] 所选设备没有采样点');
+            return;
+        }
+
+        // generateRoute requires the lazy marker root; create it like activate()
+        if (!this.root) {
+            this.root = new Entity('samplePoints');
+            scene.app.root.addChild(this.root);
+        }
+
+        // eslint-disable-next-line no-console
+        console.log(`[DeviceLedger] 为 ${devices.length} 台设备生成航线（${points.length} 个采样点）`);
+        this.generateRoute(points);
     }
 
     // ── route planning + validation ──

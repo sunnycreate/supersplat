@@ -282,6 +282,14 @@ class SamplePointPanel extends Container {
         const setVisible = (visible: boolean) => {
             if (visible === this.hidden) {
                 this.hidden = !visible;
+                // the tool owns the indicator state; resync in case it was
+                // toggled from the device ledger panel
+                if (visible) {
+                    const state = this.events.invoke('route.distIndicators.state');
+                    if (typeof state === 'boolean') {
+                        this.distIndicatorsVisible = state;
+                    }
+                }
                 events.fire('samplePointPanel.visible', visible);
             }
         };
