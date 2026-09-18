@@ -4,18 +4,15 @@ import { Entity, Vec3 } from 'playcanvas';
 
 import { Events } from '../events';
 import { RouteSafetyReport } from '../route/clearance-field';
-import { SafetyLevel } from '../route/safety-config';
 import { i18n } from './localization';
 import { MenuPanel } from './menu-panel';
-import { Tooltips } from './tooltips';
 import deleteSvg from './svg/delete.svg';
-import exportSvg from './svg/export.svg';
 import folderNewSvg from './svg/folder-new.svg';
 import folderSvg from './svg/folder.svg';
-import hiddenSvg from './svg/hidden.svg';
 import routeSvg from './svg/route.svg';
 import samplePointSvg from './svg/sample-point-small.svg';
-import shownSvg from './svg/shown.svg';
+import { Tooltips } from './tooltips';
+import { WaypointList } from './waypoint-list';
 
 const createSvg = (svgString: string) => {
     let svg = svgString;
@@ -24,9 +21,6 @@ const createSvg = (svgString: string) => {
     }
     return new DOMParser().parseFromString(svg, 'image/svg+xml').documentElement;
 };
-
-// shield-with-check icon used by the safety validate button
-const shieldSvg = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 1L10.5 2.5V6C10.5 8.5 8.5 10.4 6 11C3.5 10.4 1.5 8.5 1.5 6V2.5L6 1Z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/><path d="M4 6.1L5.4 7.5L8 4.9" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 // plus icon used by the per-point insert button
 const plusSvg = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 2V10M2 6H10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
@@ -50,9 +44,6 @@ interface WaypointData {
     name: string;
     position: Vec3;
     markerEntity: Entity;
-    // measured distance to the closest obstacle (-1 = not measured)
-    clearance: number;
-    level: SafetyLevel;
 }
 
 interface SampleFolder {
@@ -81,19 +72,11 @@ class SamplePointPanel extends Container {
         content: Container;
         items: Map<string, Container>;
         emptyRow: Container | null;
-        waypointSection: Container | null;
-        waypointItems: Map<string, Container>;
-        waypointClearance: Map<string, Label>;
-        waypointBars: Map<string, { root: Container; fill: HTMLElement }>;
-        waypointSummary: Label | null;
-        waypointStale: Label | null;
+        waypointList: WaypointList | null;
     }> = new Map();
 
     // latest measurement reported by the tool
     private safetyReport: RouteSafetyReport | null = null;
-
-    // visibility of the shortest-distance indicator lines (eye button toggle)
-    private distIndicatorsVisible = true;
 
     // marker → folder it was created in, so an undone point can be restored to
     // the same folder on redo
@@ -248,14 +231,17 @@ class SamplePointPanel extends Container {
         });
 
         // ── listen for generated waypoints from the tool ──
-        events.on('route.generated', (waypoints: { position: Vec3; markerEntity: Entity }[]) => {
+        events.on('route.generated', (waypoints: { position: Vec3; markerEntity: Entity }[], source: string) => {
+            if (source !== 'panel') return;
             this.addWaypointsToFolder(waypoints);
         });
 
         // ── listen for the obstacle measurement of the route ──
         events.on('route.validated', (report: RouteSafetyReport) => {
             this.safetyReport = report;
-            this.applySafetyReport(report);
+            for (const folder of this.folders) {
+                this.folderElements.get(folder.id)?.waypointList?.applySafetyReport(report);
+            }
         });
 
         // ── sample points that got no safe hover point (P1) ──
@@ -282,14 +268,6 @@ class SamplePointPanel extends Container {
         const setVisible = (visible: boolean) => {
             if (visible === this.hidden) {
                 this.hidden = !visible;
-                // the tool owns the indicator state; resync in case it was
-                // toggled from the device ledger panel
-                if (visible) {
-                    const state = this.events.invoke('route.distIndicators.state');
-                    if (typeof state === 'boolean') {
-                        this.distIndicatorsVisible = state;
-                    }
-                }
                 events.fire('samplePointPanel.visible', visible);
             }
         };
@@ -409,12 +387,7 @@ class SamplePointPanel extends Container {
             content,
             items: new Map(),
             emptyRow,
-            waypointSection: null,
-            waypointItems: new Map(),
-            waypointClearance: new Map(),
-            waypointBars: new Map(),
-            waypointSummary: null,
-            waypointStale: null
+            waypointList: null
         });
 
         // ── event handlers ──
@@ -614,9 +587,7 @@ class SamplePointPanel extends Container {
         if (folder.waypoints.length === 0) return;
         folder.routeStale = true;
         const el = this.folderElements.get(folder.id);
-        if (el?.waypointStale) {
-            el.waypointStale.hidden = false;
-        }
+        el?.waypointList?.setStale(true);
     }
 
     private setFolderAddingState(folderId: string, adding: boolean) {
@@ -712,7 +683,7 @@ class SamplePointPanel extends Container {
         // place the row at the point's list position, before the waypoint section
         const index = folder.points.indexOf(point);
         const nextPoint = folder.points[index + 1];
-        const refDom = (nextPoint && folderEl.items.get(nextPoint.id)?.dom) || folderEl.waypointSection?.dom || null;
+        const refDom = (nextPoint && folderEl.items.get(nextPoint.id)?.dom) || folderEl.waypointList?.dom || null;
         if (refDom && refDom.parentNode === folderEl.content.dom) {
             folderEl.content.dom.insertBefore(item.dom, refDom);
         } else {
@@ -900,276 +871,49 @@ class SamplePointPanel extends Container {
             }
         }
 
-        // and the stale-order hint
         folder.routeStale = false;
-        if (el?.waypointStale) {
-            el.waypointStale.hidden = true;
-        }
-
         folder.waypoints = [];
         let wpCounter = 0;
         for (const wp of waypoints) {
-            const id = `wp-${++pointCounter}`;
-            const data: WaypointData = {
-                id,
+            folder.waypoints.push({
+                id: `wp-${++pointCounter}`,
                 name: `WP ${++wpCounter}`,
                 position: wp.position,
-                markerEntity: wp.markerEntity,
-                clearance: -1,
-                level: SafetyLevel.unknown
-            };
-            folder.waypoints.push(data);
-        }
-
-        this.renderWaypointSection(folder);
-    }
-
-    // render the waypoint sub-folder inside the folder content
-    private renderWaypointSection(folder: SampleFolder) {
-        const el = this.folderElements.get(folder.id);
-        if (!el) return;
-
-        // remove existing section
-        if (el.waypointSection) {
-            el.content.remove(el.waypointSection);
-        }
-        el.waypointItems.clear();
-        el.waypointClearance.clear();
-        el.waypointBars.clear();
-        el.waypointSummary = null;
-
-        const section = new Container({ class: 'sample-waypoint-section' });
-
-        // sub-folder header
-        const wpHeader = new Container({ class: 'sample-waypoint-header' });
-        const wpIcon = new Container({ class: 'sample-waypoint-icon' });
-        wpIcon.dom.appendChild(createSvg(routeSvg));
-        const wpName = new Label({
-            class: 'sample-waypoint-name',
-            text: '航点'
-        });
-        const wpValidateBtn = new Container({ class: 'sample-waypoint-validate' });
-        wpValidateBtn.dom.appendChild(createSvg(shieldSvg));
-        // export the waypoint list (lon/lat/alt) to the console
-        const wpExportBtn = new Container({ class: 'sample-waypoint-export' });
-        wpExportBtn.dom.appendChild(createSvg(exportSvg));
-        // show/hide the shortest-distance indicator lines
-        const wpDistBtn = new Container({ class: 'sample-waypoint-dist' });
-        wpDistBtn.dom.appendChild(createSvg(this.distIndicatorsVisible ? shownSvg : hiddenSvg));
-        const wpDeleteBtn = new Container({ class: 'sample-waypoint-delete' });
-        wpDeleteBtn.dom.appendChild(createSvg(deleteSvg));
-
-        wpHeader.append(wpIcon);
-        wpHeader.append(wpName);
-        wpHeader.append(wpValidateBtn);
-        wpHeader.append(wpExportBtn);
-        wpHeader.append(wpDistBtn);
-        wpHeader.append(wpDeleteBtn);
-        section.append(wpHeader);
-
-        // shown when the sample point order changed after this route was made
-        const staleHint = new Label({
-            class: 'sample-waypoint-stale',
-            text: '采样点已变更，请重新生成航线',
-            hidden: !folder.routeStale
-        });
-        section.append(staleHint);
-        el.waypointStale = staleHint;
-
-        // waypoint rows
-        const wpList = new Container({ class: 'sample-waypoint-list' });
-        for (const wp of folder.waypoints) {
-            const row = new Container({ class: 'sample-waypoint-row' });
-            const name = new Label({
-                class: 'sample-point-name',
-                text: wp.name
-            });
-            // line segment visualising the measured clearance
-            const bar = this.makeClearanceBar();
-            const clearance = new Label({
-                class: 'sample-wp-clearance',
-                text: this.clearanceText(wp.clearance)
-            });
-            row.append(name);
-            row.append(bar.root);
-            row.append(clearance);
-            wpList.append(row);
-
-            el.waypointItems.set(wp.id, row);
-            el.waypointClearance.set(wp.id, clearance);
-            el.waypointBars.set(wp.id, bar);
-
-            // hover to highlight the waypoint
-            row.dom.addEventListener('pointerenter', () => {
-                this.events.fire('samplePoint.highlight', wp.markerEntity);
-            });
-            row.dom.addEventListener('pointerleave', () => {
-                this.events.fire('samplePoint.unhighlight', wp.markerEntity);
-            });
-
-            // click to fly the camera to this waypoint
-            row.dom.addEventListener('click', () => {
-                this.events.fire('samplePoint.focus', wp.markerEntity);
-            });
-        }
-        section.append(wpList);
-
-        // safety summary
-        const summary = new Label({
-            class: 'sample-waypoint-summary',
-            text: ''
-        });
-        section.append(summary);
-        el.waypointSummary = summary;
-
-        el.content.append(section);
-        el.waypointSection = section;
-
-        // delete handler
-        wpDeleteBtn.on('click', () => {
-            this.deleteWaypoints(folder.id);
-        });
-
-        // re-run the obstacle measurement
-        wpValidateBtn.on('click', () => {
-            this.events.fire('route.safety.request');
-        });
-
-        // export the folder's waypoint list to the console; the tool prefers the
-        // live marker positions (drag-aware) and converts them to WGS84
-        wpExportBtn.on('click', () => {
-            this.events.fire('waypoint.export', folder.waypoints.map(wp => ({
-                name: wp.name,
-                position: wp.position,
                 markerEntity: wp.markerEntity
-            })));
-        });
+            });
+        }
 
-        // toggle visibility of the shortest-distance indicator lines
-        wpDistBtn.on('click', () => {
-            this.distIndicatorsVisible = !this.distIndicatorsVisible;
-            wpDistBtn.dom.replaceChildren(createSvg(this.distIndicatorsVisible ? shownSvg : hiddenSvg));
-            this.events.fire('route.distIndicators', this.distIndicatorsVisible);
-        });
-
-        this.tooltips.register(wpDeleteBtn, () => i18n.t('tooltip.samplePoint.deleteFolder'), 'left');
-        this.tooltips.register(wpValidateBtn, () => '安全校验：测量航点与航线到模型的距离', 'left');
-        this.tooltips.register(wpExportBtn, () => '导出航点信息', 'left');
-        this.tooltips.register(wpDistBtn, () => '显示/隐藏最短安全距离指示线', 'left');
+        const list = this.ensureWaypointList(folder);
+        list.setWaypoints(folder.waypoints.map(wp => ({
+            name: wp.name,
+            position: wp.position,
+            markerEntity: wp.markerEntity
+        })));
 
         // render whatever has already been measured
         if (this.safetyReport) {
-            this.applySafetyReport(this.safetyReport);
+            list.applySafetyReport(this.safetyReport);
         }
     }
 
-    // ── safety reporting ──
-
-    private clearanceText(clearance: number) {
-        return clearance < 0 ? '未测量' : `${clearance.toFixed(2)} m`;
-    }
-
-    // a small horizontal line whose length is the measured clearance. the scale
-    // runs 0 → 2× hardClearance, with a tick marking the hard constraint, so a
-    // bar reaching the tick is exactly at the limit and past it is safe.
-    private makeClearanceBar(): { root: Container; fill: HTMLElement } {
-        const root = new Container({ class: 'sample-wp-bar' });
-
-        const fill = document.createElement('div');
-        fill.className = 'sample-wp-bar-fill';
-        root.dom.appendChild(fill);
-
-        const tick = document.createElement('div');
-        tick.className = 'sample-wp-bar-tick';
-        root.dom.appendChild(tick);
-
-        return { root, fill };
-    }
-
-    private updateClearanceBar(bar: { root: Container; fill: HTMLElement }, clearance: number, level: SafetyLevel, hardClearance: number) {
-        const max = hardClearance * 2;
-        const pct = clearance < 0 ? 0 : Math.max(2, Math.min(100, (clearance / max) * 100));
-        bar.fill.style.width = `${pct}%`;
-        bar.fill.classList.toggle('danger', level === SafetyLevel.danger);
-        bar.root.dom.title = clearance < 0 ?
-            '未测量' :
-            `距最近模型 ${clearance.toFixed(2)} m（安全要求 ≥ ${hardClearance.toFixed(1)} m）`;
-    }
-
-    private applySafetyReport(report: RouteSafetyReport) {
-        const byEntity = new Map<Entity, { clearance: number; level: SafetyLevel }>();
-        for (const w of report.waypoints) {
-            byEntity.set(w.entity, { clearance: w.clearance, level: w.level });
-        }
-
-        for (const folder of this.folders) {
-            const el = this.folderElements.get(folder.id);
-            if (!el) continue;
-
-            let dirty = false;
-            for (const wp of folder.waypoints) {
-                const result = byEntity.get(wp.markerEntity);
-                if (!result) continue;
-                dirty = true;
-
-                wp.clearance = result.clearance;
-                wp.level = result.level;
-
-                const label = el.waypointClearance.get(wp.id);
-                if (label) {
-                    label.text = this.clearanceText(wp.clearance);
-                    this.setLevelClass(label, wp.level);
-                }
-
-                const bar = el.waypointBars.get(wp.id);
-                if (bar) {
-                    this.updateClearanceBar(bar, wp.clearance, wp.level, report.hardClearance);
-                }
-
-                const row = el.waypointItems.get(wp.id);
-                if (row) {
-                    this.setLevelClass(row, wp.level);
-                }
-            }
-
-            if (dirty) {
-                this.updateSummary(folder, report);
-            }
-        }
-    }
-
-    private setLevelClass(element: Container | Label, level: SafetyLevel) {
-        element.class.remove('danger');
-        if (level === SafetyLevel.danger) {
-            element.class.add('danger');
-        }
-    }
-
-    private updateSummary(folder: SampleFolder, report: RouteSafetyReport) {
+    // create the folder's waypoint list component on first use
+    private ensureWaypointList(folder: SampleFolder): WaypointList {
         const el = this.folderElements.get(folder.id);
-        if (!el || !el.waypointSummary) return;
-
-        const summary = el.waypointSummary;
-        summary.class.remove('danger');
-
-        if (!report.ready) {
-            summary.text = '安全校验不可用（无可测量模型）';
-            summary.class.add('danger');
-            return;
+        if (!el) {
+            // unreachable: callers always have a rendered folder
+            throw new Error(`folder ${folder.id} is not rendered`);
         }
-
-        const min = report.minClearance;
-        const minText = min < 0 ? '—' : `${min.toFixed(2)} m`;
-
-        if (report.dangerCount > 0) {
-            summary.text = `最小安全间距 ${minText} · 危险航点 ${report.dangerCount} 处（要求 ≥ ${report.hardClearance.toFixed(1)} m）`;
-            summary.class.add('danger');
-        } else {
-            summary.text = `最小安全间距 ${minText} · 合格（要求 ≥ ${report.hardClearance.toFixed(1)} m）`;
+        if (!el.waypointList) {
+            el.waypointList = new WaypointList(this.events, this.tooltips, {
+                onDelete: () => this.deleteWaypoints(folder.id)
+            });
+            el.content.append(el.waypointList);
         }
+        return el.waypointList;
     }
 
-    // delete the waypoint sub-folder and clear the route from the scene
+    // waypoint list delete button: the component already fired 'route.clear'
+    // and emptied itself, so just reset the folder state and drop the component
     private deleteWaypoints(folderId: string) {
         const folder = this.folders.find(f => f.id === folderId);
         if (!folder) return;
@@ -1179,16 +923,12 @@ class SamplePointPanel extends Container {
             this.stopRouteEditing(folderId);
         }
 
-        // clear route from the tool
-        this.events.fire('route.clear');
-
         folder.waypoints = [];
 
-        // remove UI section
         const el = this.folderElements.get(folderId);
-        if (el && el.waypointSection) {
-            el.content.remove(el.waypointSection);
-            el.waypointSection = null;
+        if (el?.waypointList) {
+            el.waypointList.destroy();
+            el.waypointList = null;
         }
     }
 }

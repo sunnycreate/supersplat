@@ -367,27 +367,15 @@ class SamplePointTool {
             this.exportWaypoints(waypoints);
         });
 
-        // export ALL current route waypoints without a folder model
-        // (device ledger panel button)
-        events.on('route.export', () => {
-            const list = this.waypointPositions().map((wp, i) => ({
-                name: `WP ${i + 1}`,
-                position: wp.position,
-                markerEntity: wp.entity
-            }));
-            this.exportWaypoints(list);
-        });
-
-        // indicator visibility query, so any panel's eye button stays in sync
-        events.function('route.distIndicators.state', () => this.distIndicatorsVisible);
-
-        // show/hide the shortest-distance indicator lines (panel eye button)
+        // show/hide the shortest-distance indicator lines (panel eye button);
+        // broadcast the new state so every panel's eye icon stays in sync
         events.on('route.distIndicators', (visible: boolean) => {
             this.distIndicatorsVisible = visible;
             if (this.distEntity) {
                 this.distEntity.enabled = visible;
             }
             this.scene.forceRender = true;
+            events.fire('route.distIndicators.state', visible);
         });
 
         // draw/hide the bounding box of the device selected in the ledger panel
@@ -901,8 +889,8 @@ class SamplePointTool {
         }
 
         // eslint-disable-next-line no-console
-        console.log(`[DeviceLedger] 为 ${devices.length} 台设备生成航线（${points.length} 个采样点）`);
-        this.generateRoute(points);
+        console.log(`[DeviceLedger] 为 ${devices.length} 台设备生成航点及航线（${points.length} 个采样点）`);
+        this.generateRoute(points, 'device');
     }
 
     // ── route planning + validation ──
@@ -1205,7 +1193,7 @@ class SamplePointTool {
     // hover point is solved from the real surface normal with a cap search that
     // only accepts candidates satisfying the hard clearance and keeping sight of
     // their target. Points with no safe solution are skipped and reported.
-    private async generateRoute(points: { position: Vec3; normal: Vec3 }[]) {
+    private async generateRoute(points: { position: Vec3; normal: Vec3 }[], source: 'panel' | 'device' = 'panel') {
         this.clearRoute();
 
         if (!this.root || points.length === 0) return;
@@ -1277,8 +1265,9 @@ class SamplePointTool {
 
         scene.forceRender = true;
 
-        // notify listeners (panel) of the generated waypoints
-        this.events.fire('route.generated', waypointData);
+        // notify listeners of the generated waypoints ('panel' = sample point
+        // panel folder, 'device' = device ledger panel)
+        this.events.fire('route.generated', waypointData, source);
         if (unsolvable.length > 0) {
             // eslint-disable-next-line no-console
             console.warn(`[SamplePoint] ${unsolvable.length} 个采样点找不到安全悬停点，已跳过：索引 ${unsolvable.join(', ')}`);

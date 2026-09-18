@@ -1,22 +1,23 @@
 import { Container, Label } from '@playcanvas/pcui';
+import { Entity, Vec3 } from 'playcanvas';
 
 import towerData from '../../static/datas/distributionTower.json';
 import { Events } from '../events';
+import { RouteSafetyReport } from '../route/clearance-field';
 import { i18n } from './localization';
-import exportSvg from './svg/export.svg';
 import routeSvg from './svg/route.svg';
-import hiddenSvg from './svg/hidden.svg';
-import shownSvg from './svg/shown.svg';
 import { Tooltips } from './tooltips';
+import { WaypointList, createSvg } from './waypoint-list';
 
 type DeviceEntry = (typeof towerData.data)[number];
 
-const createSvg = (svgString: string) => {
-    const decodedStr = decodeURIComponent(svgString.substring('data:image/svg+xml,'.length));
-    return new DOMParser().parseFromString(decodedStr, 'image/svg+xml').documentElement;
-};
-
 class DeviceLedgerPanel extends Container {
+    private events: Events;
+    private tooltips: Tooltips;
+
+    // waypoint list for device-generated routes (created on first generation)
+    private waypointList: WaypointList | null = null;
+
     constructor(events: Events, tooltips: Tooltips, args = {}) {
         args = {
             ...args,
@@ -25,6 +26,9 @@ class DeviceLedgerPanel extends Container {
         };
 
         super(args);
+
+        this.events = events;
+        this.tooltips = tooltips;
 
         // mutually exclusive with the scene panel (initially active)
         this.hidden = true;
@@ -48,31 +52,16 @@ class DeviceLedgerPanel extends Container {
         });
         i18n.bindText(label, 'panel.device-ledger');
 
-        // generate route for the checked devices (same pipeline as the sample
-        // point panel's generate button)
+        // generate waypoints & route for the checked devices (same pipeline as
+        // the sample point panel's generate button)
         const generateBtn = new Container({
             class: 'panel-header-button'
         });
         generateBtn.dom.appendChild(createSvg(routeSvg));
 
-        // export the current route's waypoints (lon/lat/alt) to the console
-        const exportBtn = new Container({
-            class: 'panel-header-button'
-        });
-        exportBtn.dom.appendChild(createSvg(exportSvg));
-
-        // show/hide the shortest-distance indicator lines
-        let distVisible = true;
-        const distBtn = new Container({
-            class: 'panel-header-button'
-        });
-        distBtn.dom.appendChild(createSvg(distVisible ? shownSvg : hiddenSvg));
-
         header.append(icon);
         header.append(label);
         header.append(generateBtn);
-        header.append(exportBtn);
-        header.append(distBtn);
 
         // body: device ledger list (mocked from static/datas/distributionTower.json)
         const body = new Container({
@@ -133,7 +122,7 @@ class DeviceLedgerPanel extends Container {
             body.append(row);
         }
 
-        // ── generate route for the checked devices ──
+        // ── generate waypoints & route for the checked devices ──
         tooltips.register(generateBtn, () => i18n.t('tooltip.deviceLedger.generateRoute'), 'left');
 
         generateBtn.on('click', () => {
@@ -149,33 +138,26 @@ class DeviceLedgerPanel extends Container {
             })));
         });
 
-        // ── export waypoints / toggle distance indicators ──
-        tooltips.register(exportBtn, () => '导出航点信息', 'left');
-        tooltips.register(distBtn, () => '显示/隐藏最短安全距离指示线', 'left');
+        // ── waypoint list for device-generated routes ──
+        events.on('route.generated', (waypoints: { position: Vec3; markerEntity: Entity }[], source: string) => {
+            if (source !== 'device') return;
 
-        exportBtn.on('click', () => {
-            events.fire('route.export');
+            const list = this.ensureWaypointList();
+            list.setWaypoints(waypoints.map((wp, i) => ({
+                name: `WP ${i + 1}`,
+                position: wp.position,
+                markerEntity: wp.markerEntity
+            })));
         });
 
-        distBtn.on('click', () => {
-            distVisible = !distVisible;
-            distBtn.dom.replaceChildren(createSvg(distVisible ? shownSvg : hiddenSvg));
-            events.fire('route.distIndicators', distVisible);
+        events.on('route.validated', (report: RouteSafetyReport) => {
+            this.waypointList?.applySafetyReport(report);
         });
 
         // ── handle panel visibility (toggled from the right toolbar) ──
         const setVisible = (visible: boolean) => {
             if (visible === this.hidden) {
                 this.hidden = !visible;
-                // the indicator state is owned by the tool; resync the eye
-                // icon in case it was toggled from the sample point panel
-                if (visible) {
-                    const state = events.invoke('route.distIndicators.state');
-                    if (typeof state === 'boolean' && state !== distVisible) {
-                        distVisible = state;
-                        distBtn.dom.replaceChildren(createSvg(distVisible ? shownSvg : hiddenSvg));
-                    }
-                }
                 events.fire('devicePanel.visible', visible);
             }
         };
@@ -191,6 +173,22 @@ class DeviceLedgerPanel extends Container {
         events.on('devicePanel.toggleVisible', () => {
             setVisible(this.hidden);
         });
+    }
+
+    // create the waypoint list component on first generation
+    private ensureWaypointList(): WaypointList {
+        if (!this.waypointList) {
+            this.waypointList = new WaypointList(this.events, this.tooltips, {
+                onDelete: () => {
+                    // the component already fired 'route.clear' and emptied
+                    // itself; drop the empty section from the panel
+                    this.waypointList?.destroy();
+                    this.waypointList = null;
+                }
+            });
+            this.append(this.waypointList);
+        }
+        return this.waypointList;
     }
 }
 
