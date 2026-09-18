@@ -1,0 +1,167 @@
+@use 'colors.scss' as *;
+
+#waypoint-edit-panel {
+    top: 12px;
+    right: 100px;
+    width: 300px;
+    flex-direction: column;
+
+    // pcui 'hidden' only toggles the pcui-hidden class, so display must be
+    // opt-in instead of overridden
+    &:not(.pcui-hidden) {
+        display: flex;
+    }
+}
+
+.wp-edit-info {
+    font-size: 11px;
+    color: $text-primary;
+    padding: 2px 8px;
+}
+
+.wp-edit-slider-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+
+    & > .pcui-label {
+        font-size: 11px;
+        color: $text-primary;
+        padding: 0;
+        width: 40px;
+    }
+
+    input[type='range'] {
+        flex-grow: 1;
+        min-width: 0;
+    }
+}
+
+.wp-edit-step {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: $bcg-dark;
+    border-radius: 3px;
+    cursor: pointer;
+    user-select: none;
+
+    & > .pcui-label {
+        font-size: 12px;
+        line-height: 1;
+        padding: 0;
+        color: $text-primary;
+    }
+
+    &:hover {
+        background-color: $bcg-darker;
+    }
+}
+
+.wp-edit-value {
+    width: 52px;
+    flex-shrink: 0;
+    text-align: right;
+    font-size: 10px;
+    color: $text-primary;
+    padding: 0;
+    cursor: text;
+
+    &:hover {
+        color: #fff;
+    }
+}
+
+// inline editor shown when a value readout is clicked
+.wp-edit-value-input {
+    width: 52px;
+    flex-shrink: 0;
+    min-width: 0;
+    font-size: 10px;
+    line-height: 1;
+    text-align: right;
+    color: $text-primary;
+    background-color: $bcg-dark;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 3px;
+    padding: 1px 3px;
+    outline: none;
+
+    &:focus {
+        border-color: rgba(255, 255, 255, 0.6);
+    }
+}
+
+.wp-edit-wasd {
+    display: grid;
+    grid-template-columns: repeat(3, 28px);
+    gap: 4px;
+    justify-content: center;
+    padding: 6px;
+}
+
+// arrow pad grid positions mirroring the keyboard layout:
+// row 1:      [up]      / row 2: [left] [down] [right]
+.wp-edit-move-fwd {
+    grid-row: 1;
+    grid-column: 2;
+}
+
+.wp-edit-move-left {
+    grid-row: 2;
+    grid-column: 1;
+}
+
+.wp-edit-move-back {
+    grid-row: 2;
+    grid-column: 2;
+}
+
+.wp-edit-move-right {
+    grid-row: 2;
+    grid-column: 3;
+}
+
+.wp-edit-move {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: $bcg-dark;
+    border-radius: 4px;
+    cursor: pointer;
+    user-select: none;
+
+    & > .pcui-label {
+        font-size: 11px;
+        line-height: 1;
+        padding: 0;
+        color: $text-primary;
+    }
+
+    &:hover {
+        background-color: $bcg-darker;
+    }
+
+    &:active {
+        background-color: rgba(255, 255, 255, 0.15);
+    }
+}
+
+#camera-preview {
+    right: 24px;
+    bottom: 40px;
+    flex-direction: column;
+
+    // pcui 'hidden' only toggles the pcui-hidden class, so display must be
+    // opt-in instead of overridden
+    &:not(.pcui-hidden) {
+        display: flex;
+    }
+}

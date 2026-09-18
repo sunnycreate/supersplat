@@ -6,6 +6,7 @@ import { Events } from '../events';
 import { AboutPopup } from './about-popup';
 import { BottomToolbar } from './bottom-toolbar';
 import { CameraInfoOverlay } from './camera-info-overlay';
+import { CameraPreview } from './camera-preview';
 import { ColorPanel } from './color-panel';
 import { DeviceLedgerPanel } from './device-ledger-panel';
 import { ExportPopup } from './export-popup';
@@ -28,6 +29,7 @@ import { TimelinePanel } from './timeline-panel';
 import { Tooltips } from './tooltips';
 import { VideoSettingsDialog } from './video-settings-dialog';
 import { ViewCube } from './view-cube';
+import { WaypointEditPanel } from './waypoint-edit-panel';
 import { version } from '../../package.json';
 
 // ts compiler and vscode find this type, but eslint does not
@@ -107,6 +109,12 @@ class EditorUI {
         const menu = new Menu(events);
         const cameraInfoOverlay = new CameraInfoOverlay(events, tooltips);
 
+        // waypoint gimbal editing (PRD P1): edit panel (top right) and the
+        // first person preview window (bottom right), both driven by the
+        // waypoint camera rig in the sample point tool
+        const waypointEditPanel = new WaypointEditPanel(events, tooltips);
+        const cameraPreview = new CameraPreview(events);
+
         this.samplePointPanel = samplePointPanel;
         this.scenePanelDom = scenePanel.dom;
 
@@ -129,6 +137,9 @@ class EditorUI {
             });
         }
 
+        // the sample point panel is open by default on startup
+        events.fire('samplePointPanel.setVisible', true);
+
         canvasContainer.dom.appendChild(canvas);
         canvasContainer.append(appLabel);
         canvasContainer.append(cameraInfoOverlay);
@@ -141,6 +152,8 @@ class EditorUI {
         canvasContainer.append(bottomToolbar);
         canvasContainer.append(rightToolbar);
         canvasContainer.append(modeToggle);
+        canvasContainer.append(waypointEditPanel);
+        canvasContainer.append(cameraPreview);
         canvasContainer.append(menu);
 
         // view axes container

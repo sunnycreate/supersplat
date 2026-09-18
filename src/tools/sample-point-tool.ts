@@ -7,6 +7,7 @@ import { Events } from '../events';
 import { ClearanceField, RouteSafetyReport } from '../route/clearance-field';
 import { planDetour, snapToSafe, solveHoverPoint } from '../route/route-planner';
 import { SafetyLevel, levelColor } from '../route/safety-config';
+import { WaypointCameraRig } from '../route/waypoint-camera';
 import { Scene } from '../scene';
 import { Splat } from '../splat';
 
@@ -174,6 +175,10 @@ class SamplePointTool {
     private clickX = 0;
     private clickY = 0;
 
+    // gimbal attitude rig: frustum, direction indicators, WASD move and the
+    // picture-in-picture preview for waypoints (PRD P1)
+    private cameraRig: WaypointCameraRig;
+
     constructor(events: Events, scene: Scene, canvasContainer: HTMLElement, clearance: ClearanceField) {
         this.events = events;
         this.scene = scene;
@@ -185,6 +190,8 @@ class SamplePointTool {
         this.distMaterial = this.makeLineMaterial(new Color(0.098, 1, 0.137));
         this.distDangerMaterial = this.makeLineMaterial(new Color(1, 0.15, 0.1));
         this.deviceBoxMaterial = this.makeLineMaterial(new Color(1, 0.55, 0.05));
+
+        this.cameraRig = new WaypointCameraRig(events, scene);
 
         // translate gizmo for repositioning markers
         this.gizmo = new TranslateGizmo(scene.camera.camera, scene.gizmoLayer);
@@ -360,6 +367,13 @@ class SamplePointTool {
             this.legCache.clear();
             this.cachedFieldVersion = '';
             this.scheduleValidation();
+        });
+
+        // a waypoint was moved with WASD; re-plan the route around the new
+        // position (same handling as a gizmo drag)
+        events.on('route.redraw.request', (marker: Entity, position: Vec3) => {
+            this.updateRouteLine();
+            events.fire('waypoint.moved', marker, position);
         });
 
         // export the waypoint list (lon/lat/alt) to the console (panel button)
@@ -586,12 +600,15 @@ class SamplePointTool {
         const rows = waypoints.map((wp, i) => {
             const position = live.get(wp.markerEntity) ?? wp.position;
             const wgs84 = this.sceneToWgs84(position);
+            const gimbal = this.cameraRig.getExportData(wp.markerEntity);
             return {
                 index: i + 1,
                 name: wp.name,
                 lon: wgs84 ? +wgs84.lon.toFixed(8) : null,
                 lat: wgs84 ? +wgs84.lat.toFixed(8) : null,
-                alt: wgs84 ? +wgs84.alt.toFixed(3) : null
+                alt: wgs84 ? +wgs84.alt.toFixed(3) : null,
+                // gimbal attitude + distances (PRD P1)
+                gimbal
             };
         });
 
@@ -602,7 +619,7 @@ class SamplePointTool {
                 ? '无地理元数据（场景坐标不可导出 lon/lat/alt）'
                 : `lon=${row.lon}, lat=${row.lat}, alt=${row.alt}`;
             // eslint-disable-next-line no-console
-            console.log(`[Waypoint] ${row.name}: ${coord}`);
+            console.log(`[Waypoint] ${row.name}: ${coord} | yaw(相对航线)=${row.gimbal.yaw}° pitch=${row.gimbal.pitch}° focal=${row.gimbal.focal}mm | 对地=${row.gimbal.groundDist}m 拍摄=${row.gimbal.shootDist}m`);
         }
         // eslint-disable-next-line no-console
         console.log('[Waypoint] export:', rows);
@@ -611,6 +628,9 @@ class SamplePointTool {
     private selectMarker(marker: Entity) {
         this.selectedMarker = marker;
         this.gizmo.attach(marker);
+        // waypoints drive the gimbal rig (frustum + preview); sample points
+        // just get the gizmo
+        this.cameraRig.select(marker);
         this.scene.forceRender = true;
     }
 
@@ -618,6 +638,7 @@ class SamplePointTool {
         this.selectedMarker = null;
         this.gizmo.detach();
         this.dragStartPos = null;
+        this.cameraRig.deselect();
         this.scene.forceRender = true;
     }
 
@@ -683,6 +704,7 @@ class SamplePointTool {
     // remove an existing generated route
     private clearRoute() {
         this.deselectMarker();
+        this.cameraRig.routeCleared();
         this.markerLevels.clear();
         this.legCache.clear();
         this.disposeLine(this.routeLine);
@@ -1211,7 +1233,7 @@ class SamplePointTool {
         const wpRadius = Math.max(sceneRadius * 0.002 / 3, 0.0005 / 3);
         const wpScale = wpRadius * 2;
 
-        const waypointData: { position: Vec3; markerEntity: Entity }[] = [];
+        const waypointData: { position: Vec3; markerEntity: Entity; viewDir: Vec3 }[] = [];
         const unsolvable: number[] = [];
 
         for (let i = 0; i < points.length; i++) {
@@ -1251,7 +1273,11 @@ class SamplePointTool {
             wp.setLocalPosition(hoverPos);
             routeEntity.addChild(wp);
 
-            waypointData.push({ position: hoverPos.clone(), markerEntity: wp });
+            // initial gimbal aim: from the hover point towards the sampled
+            // surface point (the subject the waypoint is supposed to shoot)
+            const viewDir = new Vec3().sub2(point.position, hoverPos).normalize();
+
+            waypointData.push({ position: hoverPos.clone(), markerEntity: wp, viewDir });
         }
 
         scene.app.root.addChild(routeEntity);
