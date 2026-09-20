@@ -1233,7 +1233,7 @@ class SamplePointTool {
         const wpRadius = Math.max(sceneRadius * 0.002 / 3, 0.0005 / 3);
         const wpScale = wpRadius * 2;
 
-        const waypointData: { position: Vec3; markerEntity: Entity; viewDir: Vec3 }[] = [];
+        const waypointData: { position: Vec3; markerEntity: Entity; viewDir: Vec3; subject: Vec3 }[] = [];
         const unsolvable: number[] = [];
 
         for (let i = 0; i < points.length; i++) {
@@ -1277,7 +1277,7 @@ class SamplePointTool {
             // surface point (the subject the waypoint is supposed to shoot)
             const viewDir = new Vec3().sub2(point.position, hoverPos).normalize();
 
-            waypointData.push({ position: hoverPos.clone(), markerEntity: wp, viewDir });
+            waypointData.push({ position: hoverPos.clone(), markerEntity: wp, viewDir, subject: point.position.clone() });
         }
 
         scene.app.root.addChild(routeEntity);

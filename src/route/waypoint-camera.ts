@@ -2,7 +2,6 @@ import { BLEND_NORMAL, Color, Entity, Mat4, Mesh, MeshInstance, PIXELFORMAT_RGBA
 
 import { Events } from '../events';
 import { Scene } from '../scene';
-import { SafetyLevel } from './safety-config';
 
 // gimbal parameter limits (DJI-like)
 const YAW_LIMIT = 180;          // ±deg
@@ -89,9 +88,9 @@ class WaypointCameraRig {
     // attitude per waypoint marker
     private attitudes = new Map<Entity, Attitude>();
 
-    // latest measured distance to the closest model, per waypoint (from
-    // 'route.validated'); < 0 = not measured
-    private clearances = new Map<Entity, number>();
+    // sampled surface point each waypoint is supposed to shoot (set at route
+    // generation); drives the shooting-distance readout
+    private subjects = new Map<Entity, Vec3>();
 
     // current waypoint list (kept in sync via events)
     private waypoints: WaypointEntry[] = [];
@@ -129,7 +128,7 @@ class WaypointCameraRig {
         this.scene = scene;
 
         this.frustumMat = this.makeFrustumMaterial();
-        this.frustumEdgeMat = this.makeLineMaterial(new Color(0.4, 0.75, 1));
+        this.frustumEdgeMat = this.makeLineMaterial(new Color(0.3, 1, 0.5));
         this.dirMat = this.makeLineMaterial(new Color(1, 0.8, 0.2));
 
         // ── gimbal parameter changes from the edit panel ──
@@ -164,22 +163,22 @@ class WaypointCameraRig {
             this.endMove();
         });
 
-        // safety report → per-waypoint shooting distance; the selected
-        // waypoint's info line refreshes as measurements arrive
-        events.on('route.validated', (report: { waypoints: { entity: Entity; clearance: number; level: SafetyLevel }[] }) => {
-            for (const w of report.waypoints) {
-                this.clearances.set(w.entity, w.clearance);
-            }
+        // safety report finished measuring → refresh the selected waypoint's
+        // info line
+        events.on('route.validated', () => {
             if (this.selected) {
                 this.fireUpdated(this.selected);
             }
         });
 
         // route lifecycle
-        events.on('route.generated', (waypoints: { position: Vec3; markerEntity: Entity; viewDir?: Vec3 }[]) => {
+        events.on('route.generated', (waypoints: { position: Vec3; markerEntity: Entity; viewDir?: Vec3; subject?: Vec3 }[]) => {
             this.waypoints = waypoints.map((wp) => ({ marker: wp.markerEntity, position: wp.position.clone() }));
-            this.clearances.clear();
+            this.subjects.clear();
             for (const wp of waypoints) {
+                if (wp.subject) {
+                    this.subjects.set(wp.markerEntity, wp.subject.clone());
+                }
                 if (!this.attitudes.has(wp.markerEntity)) {
                     // aim the gimbal at the sampled surface point when the
                     // tool supplies the view direction, else the fixed default
@@ -274,7 +273,7 @@ class WaypointCameraRig {
     routeCleared() {
         this.waypoints = [];
         this.attitudes.clear();
-        this.clearances.clear();
+        this.subjects.clear();
         this.deselect();
         this.destroyDirLines();
     }
@@ -290,7 +289,7 @@ class WaypointCameraRig {
             pitch: +(attitude?.pitch ?? 0).toFixed(2),
             focal: +(attitude?.focal ?? FOCAL_DEFAULT).toFixed(2),
             groundDist: +this.groundDist(position).toFixed(3),
-            shootDist: +(this.clearances.get(marker) ?? -1).toFixed(3)
+            shootDist: +this.shootDist(position, marker).toFixed(3)
         };
     }
 
@@ -406,6 +405,13 @@ class WaypointCameraRig {
         return position.y - (bound.center.y - bound.halfExtents.y);
     }
 
+    // straight-line distance to the sampled surface point this waypoint
+    // shoots (-1 when the tool did not supply a subject)
+    private shootDist(position: Vec3, marker: Entity): number {
+        const subject = this.subjects.get(marker);
+        return subject ? position.distance(subject) : -1;
+    }
+
     private firePayload(marker: Entity) {
         const attitude = this.attitudes.get(marker);
         const position = marker.getLocalPosition();
@@ -416,7 +422,7 @@ class WaypointCameraRig {
             // stays in the world frame for rendering
             relativeYaw: attitude ? this.relativeYaw(marker) : null,
             groundDist: +this.groundDist(position).toFixed(3),
-            shootDist: +(this.clearances.get(marker) ?? -1).toFixed(3)
+            shootDist: +this.shootDist(position, marker).toFixed(3)
         };
     }
 
@@ -432,8 +438,8 @@ class WaypointCameraRig {
 
     private makeFrustumMaterial() {
         const mat = new StandardMaterial();
-        mat.diffuse = new Color(0.1, 0.45, 1);
-        mat.emissive = new Color(0.1, 0.45, 1);
+        mat.diffuse = new Color(0.1, 0.85, 0.35);
+        mat.emissive = new Color(0.1, 0.85, 0.35);
         mat.metalness = 0;
         // kept faint: the double-sided winding duplicates overlap, and the
         // edge wireframe carries the shape
@@ -572,11 +578,22 @@ class WaypointCameraRig {
             const attitude = this.attitudes.get(wp.marker);
             if (!attitude) continue;
             const start = wp.marker.getLocalPosition();
-            attitudeDir(attitude, dir);
-            positions.push(
-                start.x, start.y, start.z,
-                start.x + dir.x * len, start.y + dir.y * len, start.z + dir.z * len
-            );
+            // with a known subject the line spans exactly to it (its length
+            // is the shooting distance); otherwise fall back to a short
+            // attitude-direction tick
+            let end: Vec3;
+            const subject = this.subjects.get(wp.marker);
+            if (subject) {
+                end = subject;
+            } else {
+                attitudeDir(attitude, dir);
+                end = new Vec3(
+                    start.x + dir.x * len,
+                    start.y + dir.y * len,
+                    start.z + dir.z * len
+                );
+            }
+            positions.push(start.x, start.y, start.z, end.x, end.y, end.z);
         }
         if (positions.length === 0) return;
 
