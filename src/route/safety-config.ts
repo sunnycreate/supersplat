@@ -59,7 +59,7 @@ interface SafetyConfig {
 // plus the operator's safety margin.
 const DEFAULT_SAFETY_CONFIG: SafetyConfig = {
     droneRadius: 0.5,
-    safetyMargin: 1,
+    safetyMargin: 4.5,
     opacityThreshold: 0.15,
     voxelSize: 0.5,
     maxCells: 4000000,
