@@ -305,8 +305,17 @@ class WaypointList extends Container {
         const min = report.minClearance;
         const minText = min < 0 ? '—' : `${min.toFixed(2)} m`;
 
+        // unsafe when a waypoint is flagged, or when the tightest measured
+        // spot anywhere on the route (waypoint or segment sample) falls
+        // inside the hard clearance — segments never carry a danger level
+        // themselves (detour failures keep the straight leg), so the min
+        // value is the only witness for them
+        const routeTooClose = min >= 0 && min < report.hardClearance;
         if (report.dangerCount > 0) {
             summary.text = `最小安全间距 ${minText} · 危险航点 ${report.dangerCount} 处（要求 ≥ ${report.hardClearance.toFixed(1)} m）`;
+            summary.class.add('danger');
+        } else if (routeTooClose) {
+            summary.text = `最小安全间距 ${minText} · 航线间距不足（要求 ≥ ${report.hardClearance.toFixed(1)} m）`;
             summary.class.add('danger');
         } else {
             summary.text = `最小安全间距 ${minText} · 合格（要求 ≥ ${report.hardClearance.toFixed(1)} m）`;
