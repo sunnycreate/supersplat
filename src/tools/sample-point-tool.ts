@@ -98,22 +98,45 @@ class MoveSamplePointOp implements EditOp {
     oldPos: Vec3;
     newPos: Vec3;
     scene: Scene;
+    events: Events;
+    toWgs84: (pos: Vec3) => { lat: number; lon: number; alt: number } | null;
 
-    constructor(marker: Entity, oldPos: Vec3, newPos: Vec3, scene: Scene) {
+    constructor(
+        marker: Entity,
+        oldPos: Vec3,
+        newPos: Vec3,
+        scene: Scene,
+        events: Events,
+        toWgs84: (pos: Vec3) => { lat: number; lon: number; alt: number } | null
+    ) {
         this.marker = marker;
         this.oldPos = oldPos;
         this.newPos = newPos;
         this.scene = scene;
+        this.events = events;
+        this.toWgs84 = toWgs84;
     }
 
     do() {
         this.marker.setLocalPosition(this.newPos);
         this.scene.forceRender = true;
+        // fired from do()/undo() rather than from the gizmo handler so that
+        // undo/redo keep the panel row and waypoint subjects in sync too
+        this.events.fire('samplePoint.moved', {
+            marker: this.marker,
+            position: this.newPos.clone(),
+            wgs84: this.toWgs84(this.newPos)
+        });
     }
 
     undo() {
         this.marker.setLocalPosition(this.oldPos);
         this.scene.forceRender = true;
+        this.events.fire('samplePoint.moved', {
+            marker: this.marker,
+            position: this.oldPos.clone(),
+            wgs84: this.toWgs84(this.oldPos)
+        });
     }
 }
 
@@ -219,13 +242,17 @@ class SamplePointTool {
                         this.updateRouteLine();
                         events.fire('waypoint.moved', this.selectedMarker, newPos.clone());
                     } else {
-                        // suppress do because the gizmo already applied the move
+                        // do() re-applies the position the gizmo already set
+                        // (idempotent) and fires 'samplePoint.moved' so the
+                        // panel row and the waypoint subject lines follow
                         events.fire('edit.add', new MoveSamplePointOp(
                             this.selectedMarker,
                             this.dragStartPos,
                             newPos,
-                            scene
-                        ), true);
+                            scene,
+                            events,
+                            (pos) => this.sceneToWgs84(pos)
+                        ));
                     }
                 }
                 this.dragStartPos = null;
@@ -344,7 +371,7 @@ class SamplePointTool {
         });
 
         // generate waypoints and route line from sample points
-        events.on('samplePoint.generateRoute', (points: { position: Vec3; normal: Vec3 }[]) => {
+        events.on('samplePoint.generateRoute', (points: { position: Vec3; normal: Vec3; marker?: Entity }[]) => {
             this.generateRoute(points);
         });
 
@@ -1215,7 +1242,7 @@ class SamplePointTool {
     // hover point is solved from the real surface normal with a cap search that
     // only accepts candidates satisfying the hard clearance and keeping sight of
     // their target. Points with no safe solution are skipped and reported.
-    private async generateRoute(points: { position: Vec3; normal: Vec3 }[], source: 'panel' | 'device' = 'panel') {
+    private async generateRoute(points: { position: Vec3; normal: Vec3; marker?: Entity }[], source: 'panel' | 'device' = 'panel') {
         this.clearRoute();
 
         if (!this.root || points.length === 0) return;
@@ -1233,7 +1260,7 @@ class SamplePointTool {
         const wpRadius = Math.max(sceneRadius * 0.002 / 3, 0.0005 / 3);
         const wpScale = wpRadius * 2;
 
-        const waypointData: { position: Vec3; markerEntity: Entity; viewDir: Vec3; subject: Vec3 }[] = [];
+        const waypointData: { position: Vec3; markerEntity: Entity; viewDir: Vec3; subject: Vec3; subjectMarker?: Entity }[] = [];
         const unsolvable: number[] = [];
 
         for (let i = 0; i < points.length; i++) {
@@ -1277,7 +1304,7 @@ class SamplePointTool {
             // surface point (the subject the waypoint is supposed to shoot)
             const viewDir = new Vec3().sub2(point.position, hoverPos).normalize();
 
-            waypointData.push({ position: hoverPos.clone(), markerEntity: wp, viewDir, subject: point.position.clone() });
+            waypointData.push({ position: hoverPos.clone(), markerEntity: wp, viewDir, subject: point.position.clone(), subjectMarker: point.marker });
         }
 
         scene.app.root.addChild(routeEntity);

@@ -122,8 +122,10 @@ class Tooltips extends Container {
         this.unregister = (target: Element) => {
             const value = targets.get(target);
             if (value) {
-                target.dom.removeEventListener('pointerenter', value.enter);
-                target.dom.removeEventListener('pointerleave', value.leave);
+                // pcui nulls dom before emitting 'destroy', so the listeners
+                // may already be gone when unregister runs from that event
+                target.dom?.removeEventListener('pointerenter', value.enter);
+                target.dom?.removeEventListener('pointerleave', value.leave);
                 targets.delete(target);
             }
         };

@@ -215,6 +215,26 @@ class SamplePointPanel extends Container {
             }
         });
 
+        // ── a marker was dragged (or undo/redo moved it): sync the row coords ──
+        events.on('samplePoint.moved', (data: { marker: Entity; position: Vec3; wgs84: { lat: number; lon: number; alt: number } | null }) => {
+            for (const folder of this.folders) {
+                const point = folder.points.find(p => p.markerEntity === data.marker);
+                if (!point) continue;
+
+                point.position.copy(data.position);
+                point.wgs84 = data.wgs84;
+
+                const row = this.folderElements.get(folder.id)?.items.get(point.id);
+                const info = row?.dom.querySelector('.sample-point-info') as HTMLElement | null;
+                if (info) {
+                    info.textContent = point.wgs84
+                        ? `lat:${point.wgs84.lat.toFixed(4)}, lon:${point.wgs84.lon.toFixed(4)}, alt:${point.wgs84.alt.toFixed(1)}`
+                        : `(${point.position.x.toFixed(1)}, ${point.position.y.toFixed(1)}, ${point.position.z.toFixed(1)})`;
+                }
+                return;
+            }
+        });
+
         // ── listen for tool deactivation (e.g. user pressed Escape or switched tool) ──
         events.on('tool.activated', (toolName: string) => {
             if (toolName !== 'samplePoint') {
@@ -825,10 +845,12 @@ class SamplePointPanel extends Container {
         this.events.fire('bottomToolbar.hide');
         this.activateSamplePointTool();
 
-        // generate route (tool fires route.generated when done)
+        // generate route (tool fires route.generated when done); marker refs
+        // let the tool link each waypoint back to its sample point
         const points = folder.points.map(p => ({
             position: p.position,
-            normal: p.normal
+            normal: p.normal,
+            marker: p.markerEntity
         }));
         this.events.fire('samplePoint.generateRoute', points);
 

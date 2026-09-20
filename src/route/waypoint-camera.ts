@@ -92,6 +92,10 @@ class WaypointCameraRig {
     // generation); drives the shooting-distance readout
     private subjects = new Map<Entity, Vec3>();
 
+    // the sample point marker each subject came from, so dragging a sample
+    // point marker can move the linked subject with it
+    private subjectSamples = new Map<Entity, Entity>();
+
     // current waypoint list (kept in sync via events)
     private waypoints: WaypointEntry[] = [];
 
@@ -172,12 +176,16 @@ class WaypointCameraRig {
         });
 
         // route lifecycle
-        events.on('route.generated', (waypoints: { position: Vec3; markerEntity: Entity; viewDir?: Vec3; subject?: Vec3 }[]) => {
+        events.on('route.generated', (waypoints: { position: Vec3; markerEntity: Entity; viewDir?: Vec3; subject?: Vec3; subjectMarker?: Entity }[]) => {
             this.waypoints = waypoints.map((wp) => ({ marker: wp.markerEntity, position: wp.position.clone() }));
             this.subjects.clear();
+            this.subjectSamples.clear();
             for (const wp of waypoints) {
                 if (wp.subject) {
                     this.subjects.set(wp.markerEntity, wp.subject.clone());
+                }
+                if (wp.subjectMarker) {
+                    this.subjectSamples.set(wp.markerEntity, wp.subjectMarker);
                 }
                 if (!this.attitudes.has(wp.markerEntity)) {
                     // aim the gimbal at the sampled surface point when the
@@ -200,6 +208,35 @@ class WaypointCameraRig {
                 this.refreshFrustum();
                 this.refreshPipPose();
                 this.fireUpdated(marker);
+            }
+        });
+
+        // a sample point marker was dragged: move the linked subjects with it
+        // and re-aim the gimbal so each waypoint keeps shooting its sample point
+        events.on('samplePoint.moved', (data: { marker: Entity; position: Vec3 }) => {
+            let changed = false;
+            for (const [wpMarker, sampleMarker] of this.subjectSamples) {
+                if (sampleMarker !== data.marker) continue;
+                const subject = this.subjects.get(wpMarker);
+                if (!subject) continue;
+                subject.copy(data.position);
+                // same aim rule as route generation: forward towards the subject
+                const attitude = this.attitudes.get(wpMarker);
+                if (attitude) {
+                    const aim = attitudeFromDir(new Vec3().sub2(subject, wpMarker.getLocalPosition()).normalize());
+                    attitude.yaw = aim.yaw;
+                    attitude.pitch = aim.pitch;
+                }
+                changed = true;
+            }
+            if (changed) {
+                this.rebuildDirLines();
+                if (this.selected) {
+                    this.refreshFrustum();
+                    this.refreshPipPose();
+                    this.fireUpdated(this.selected);
+                }
+                this.scene.forceRender = true;
             }
         });
 
@@ -265,7 +302,8 @@ class WaypointCameraRig {
             this.scene.app.root.removeChild(this.pipEntity);
         }
         this.events.fire('cameraPreview.visible', false);
-        this.events.fire('waypointAttitude.selected', null);
+        // payload shape must match 'fireSelected': listeners read data.marker
+        this.events.fire('waypointAttitude.selected', { marker: null });
         this.scene.forceRender = true;
     }
 
@@ -274,6 +312,7 @@ class WaypointCameraRig {
         this.waypoints = [];
         this.attitudes.clear();
         this.subjects.clear();
+        this.subjectSamples.clear();
         this.deselect();
         this.destroyDirLines();
     }
