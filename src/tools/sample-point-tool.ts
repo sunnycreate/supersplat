@@ -33,8 +33,9 @@ const tmpSide = new Vec3();
 
 // planned result for one leg of the route
 interface LegPlan {
-    // intermediate points making the leg safe; null when the straight leg is
-    // already safe, empty when no safe path was found
+    // intermediate points to insert between the endpoints (empty when the
+    // straight leg is already safe); null when the detour search failed and
+    // the straight leg is kept (its measured level then flags it)
     detour: Vec3[] | null;
     // worst clearance along the leg
     clearance: number;
@@ -1075,12 +1076,12 @@ class SamplePointTool {
                     }
                 }
 
-                // legs are never flagged: P2 routes them around obstacles and
-                // the waypoints carry the safety gate
+                // legs carry their measured level: a leg whose detour search
+                // failed keeps the straight line and now shows up as danger
                 report.segments.push({
                     index: i,
                     clearance: plan.clearance,
-                    level: SafetyLevel.safe,
+                    level: this.clearance.level(plan.clearance),
                     point: plan.point.clone()
                 });
             }

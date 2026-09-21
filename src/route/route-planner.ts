@@ -209,54 +209,67 @@ const solveHoverPoint = (
     }
 
     const hard = hardClearance(config);
+    // aim above the hard floor so freshly created waypoints don't hug the
+    // safety limit — segment chords and field discretization can shave ~0.1 m
+    // off the measured minimum (e.g. hard 7.0 → hover points land at ~7.5)
+    const target = hard + config.hoverBuffer;
     const dirs = capDirections(normal, config.capAngleDeg, config.searchDirections);
 
-    let best: Vec3 = null;
-    let bestScore = -Infinity;
-    let bestClearance = -1;
+    // cap search: candidates on the normal's cap × distance scales, scored by
+    // clearance, angular deviation and distance to the preferred one
+    const search = (minClearance: number): { position: Vec3; clearance: number } | null => {
+        let best: Vec3 = null;
+        let bestScore = -Infinity;
+        let bestClearance = -1;
 
-    for (const scale of config.distanceScales) {
-        const distance = Math.min(config.maxDistance, Math.max(config.minDistance, config.hoverDistance * scale));
+        for (const scale of config.distanceScales) {
+            const distance = Math.min(config.maxDistance, Math.max(config.minDistance, config.hoverDistance * scale));
 
-        for (const dir of dirs) {
-            tmpA.copy(samplePos).add(tmpB.copy(dir).mulScalar(distance));
+            for (const dir of dirs) {
+                tmpA.copy(samplePos).add(tmpB.copy(dir).mulScalar(distance));
 
-            const c = field.clearance(tmpA);
-            if (c < hard) continue;
+                const c = field.clearance(tmpA);
+                if (c < minClearance) continue;
 
-            const angle = Math.acos(Math.min(1, Math.max(-1, dir.dot(normal))));
-            if (!hasLineOfSight(field, tmpA, samplePos, config.sightClearance)) continue;
+                const angle = Math.acos(Math.min(1, Math.max(-1, dir.dot(normal))));
+                if (!hasLineOfSight(field, tmpA, samplePos, config.sightClearance)) continue;
 
-            const score = Math.min(c, hard * 2) -
-                          angle * hard * 0.5 -
-                          Math.abs(distance - config.hoverDistance) * 0.5;
+                const score = Math.min(c, hard * 2) -
+                              angle * hard * 0.5 -
+                              Math.abs(distance - config.hoverDistance) * 0.5;
 
-            if (score > bestScore) {
-                bestScore = score;
-                best = tmpA.clone();
-                bestClearance = c;
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = tmpA.clone();
+                    bestClearance = c;
+                }
             }
         }
-    }
+
+        return best ? { position: best, clearance: bestClearance } : null;
+    };
 
     // last resort: straight out along the normal, as far as allowed
-    if (!best) {
+    const straightOut = (minClearance: number): { position: Vec3; clearance: number } | null => {
         for (let d = config.minDistance; d <= config.maxDistance; d += 0.5) {
             tmpA.copy(samplePos).add(tmpB.copy(normal).mulScalar(d));
-            if (field.clearance(tmpA) >= hard &&
+            if (field.clearance(tmpA) >= minClearance &&
                 hasLineOfSight(field, tmpA, samplePos, config.sightClearance)) {
-                best = tmpA.clone();
-                bestClearance = field.clearance(tmpA);
-                break;
+                return { position: tmpA.clone(), clearance: field.clearance(tmpA) };
             }
         }
-    }
+        return null;
+    };
 
-    if (!best) {
+    // prefer the buffered tier; the plain hard floor is the fallback so tight
+    // spots still get a (barely legal) waypoint instead of being skipped
+    const found = search(target) ?? search(hard) ?? straightOut(target) ?? straightOut(hard);
+
+    if (!found) {
         return { position: samplePos.clone(), ok: false, clearance: -1 };
     }
 
-    return { position: best, ok: true, clearance: bestClearance };
+    return { position: found.position, ok: true, clearance: found.clearance };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -339,6 +352,44 @@ const shortcut = (field: FieldAdapter, pts: Vec3[], hard: number): Vec3[] => {
         i = j;
     }
     return out;
+};
+
+// Deterministic detour of last resort: when the grid search finds no path
+// (the detour would have to leave the search volume, or the free cells do
+// not connect), push a single relay point out from the leg's worst-clearance
+// spot along the away-from-obstacle direction until both resulting sub-legs
+// measure safe. Cruder than the A* detour, but it resolves the common 'leg
+// grazing an obstacle' case that has a clear escape direction.
+const relayDetour = (field: FieldAdapter, a: Vec3, b: Vec3, hard: number): Vec3[] | null => {
+    const worst = field.segmentMinClearance(a, b);
+    if (worst.clearance < 0) return null;
+
+    // away-from-obstacle direction at the worst spot
+    const obstacle = new Vec3();
+    field.nearestObstacle(worst.point, obstacle);
+    const away = tmpA.sub2(worst.point, obstacle);
+    if (away.lengthSq() < 1e-9) return null;
+    away.normalize();
+
+    // leg direction, used to tilt the relay towards either end so that the
+    // sub-legs are easier to clear
+    const seg = tmpB.sub2(b, a).normalize();
+
+    const dirs: Vec3[] = [away];
+    for (const k of [0.5, -0.5, 1.0, -1.0]) {
+        dirs.push(new Vec3().copy(away).add(new Vec3().copy(seg).mulScalar(k)).normalize());
+    }
+
+    for (const dir of dirs) {
+        for (const dist of [hard, hard * 1.5, hard * 2, hard * 3]) {
+            const cand = new Vec3().copy(worst.point).add(dir.clone().mulScalar(dist));
+            if (field.clearance(cand) < hard) continue;
+            if (field.segmentMinClearance(a, cand).clearance < hard) continue;
+            if (field.segmentMinClearance(cand, b).clearance < hard) continue;
+            return [cand];
+        }
+    }
+    return null;
 };
 
 // Plan a safe path from a to b.
@@ -475,7 +526,9 @@ const planDetour = (field: FieldAdapter, a: Vec3, b: Vec3, config: SafetyConfig)
     }
 
     if (!found) {
-        return null;
+        // grid search failed — try the cheap deterministic relay before
+        // giving up and keeping the straight (unsafe) leg
+        return relayDetour(field, a, b, hard);
     }
 
     // rebuild the path

@@ -41,6 +41,9 @@ interface SafetyConfig {
     maxDistance: number;
     // clearance required along the line from the hover point to its target
     sightClearance: number;
+    // extra clearance aimed for above the hard floor when placing a hover
+    // point, so new waypoints don't hug the safety limit (metres)
+    hoverBuffer: number;
     // directions sampled on the search cap
     searchDirections: number;
 
@@ -59,7 +62,7 @@ interface SafetyConfig {
 // plus the operator's safety margin.
 const DEFAULT_SAFETY_CONFIG: SafetyConfig = {
     droneRadius: 0.5,
-    safetyMargin: 4.5,
+    safetyMargin: 2.5,
     opacityThreshold: 0.15,
     voxelSize: 0.5,
     maxCells: 4000000,
@@ -71,11 +74,12 @@ const DEFAULT_SAFETY_CONFIG: SafetyConfig = {
     // P1
     normalRadius: 0.4,
     normalMinPoints: 12,
-    capAngleDeg: 60,
+    capAngleDeg: 90,
     distanceScales: [0.6, 0.8, 1.0, 1.3],
     minDistance: 1.0,
     maxDistance: 20.0,
     sightClearance: 0.5,
+    hoverBuffer: 0.5,
     searchDirections: 96,
 
     // P2
