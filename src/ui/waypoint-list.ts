@@ -316,7 +316,6 @@ class WaypointList extends Container {
             summary.class.add('danger');
         } else if (routeTooClose) {
             summary.text = `最小安全间距 ${minText} · 航线间距不足（要求 ≥ ${report.hardClearance.toFixed(1)} m）`;
-            summary.class.add('danger');
         } else {
             summary.text = `最小安全间距 ${minText} · 合格（要求 ≥ ${report.hardClearance.toFixed(1)} m）`;
         }
