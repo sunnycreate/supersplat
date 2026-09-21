@@ -29,6 +29,11 @@
     display: block;
 }
 
+// active generate button = route edit mode (waypoint picking enabled)
+#device-ledger-panel .panel-header-button.active svg {
+    color: $clr-active;
+}
+
 .device-row {
     display: flex;
     align-items: center;

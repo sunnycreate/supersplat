@@ -18,6 +18,14 @@ class DeviceLedgerPanel extends Container {
     // waypoint list for device-generated routes (created on first generation)
     private waypointList: WaypointList | null = null;
 
+    // generate button: header icon (kept as a field for the active state)
+    private generateBtn: Container;
+
+    // route edit mode: true between generating the route and exiting via a
+    // second button click / Escape / route deletion; in this state waypoints
+    // are clickable and the waypoint edit panel shows
+    private routeActive = false;
+
     constructor(events: Events, tooltips: Tooltips, args = {}) {
         args = {
             ...args,
@@ -124,8 +132,17 @@ class DeviceLedgerPanel extends Container {
 
         // ── generate waypoints & route for the checked devices ──
         tooltips.register(generateBtn, () => i18n.t('tooltip.deviceLedger.generateRoute'), 'left');
+        this.generateBtn = generateBtn;
 
+        // toggle semantics (same as the sample point panel's route button):
+        // first click generates + enters route edit mode; second click exits
+        // edit mode (the route stays in the scene)
         generateBtn.on('click', () => {
+            if (this.routeActive) {
+                this.exitRouteMode();
+                return;
+            }
+
             const devices = [...checkedDevices];
             if (devices.length === 0) {
                 // eslint-disable-next-line no-console
@@ -136,6 +153,24 @@ class DeviceLedgerPanel extends Container {
                 name: d.name,
                 samplePoint: d.value.samplePoint ?? []
             })));
+
+            // route edit mode: activate the sample point tool (waypoint
+            // picking lives there) and let it know clicks are for picking,
+            // not for placing new sample markers
+            if (events.invoke('tool.active') !== 'samplePoint') {
+                events.fire('tool.samplePoint');
+            }
+            events.fire('bottomToolbar.hide');
+            events.fire('samplePoint.routeMode', true);
+            this.setRouteActive(true);
+        });
+
+        // leaving the sample point tool (Escape / another tool selected)
+        // exits route edit mode
+        events.on('tool.activated', (toolName: string) => {
+            if (toolName !== 'samplePoint' && this.routeActive) {
+                this.exitRouteMode();
+            }
         });
 
         // ── waypoint list for device-generated routes ──
@@ -181,7 +216,11 @@ class DeviceLedgerPanel extends Container {
             this.waypointList = new WaypointList(this.events, this.tooltips, {
                 onDelete: () => {
                     // the component already fired 'route.clear' and emptied
-                    // itself; drop the empty section from the panel
+                    // itself; drop the empty section from the panel and exit
+                    // route edit mode (nothing left to pick)
+                    if (this.routeActive) {
+                        this.exitRouteMode();
+                    }
                     this.waypointList?.destroy();
                     this.waypointList = null;
                 }
@@ -189,6 +228,19 @@ class DeviceLedgerPanel extends Container {
             this.append(this.waypointList);
         }
         return this.waypointList;
+    }
+
+    private setRouteActive(active: boolean) {
+        if (this.routeActive === active) return;
+        this.routeActive = active;
+        this.generateBtn?.class[active ? 'add' : 'remove']('active');
+    }
+
+    private exitRouteMode() {
+        this.setRouteActive(false);
+        this.events.fire('samplePoint.routeMode', false);
+        this.events.fire('bottomToolbar.show');
+        this.events.fire('tool.move');
     }
 }
 
