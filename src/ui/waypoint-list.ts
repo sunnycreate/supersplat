@@ -54,7 +54,8 @@ class WaypointList extends Container {
 
     // visibility of the shortest-distance indicator lines; the tool owns the
     // authoritative state and broadcasts 'route.distIndicators.state'
-    private distVisible = true;
+    // (indicators start hidden when a route is generated)
+    private distVisible = false;
 
     constructor(events: Events, tooltips: Tooltips, options: { onDelete?: () => void } = {}) {
         super({ class: 'sample-waypoint-section' });

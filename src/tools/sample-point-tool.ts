@@ -170,8 +170,9 @@ class SamplePointTool {
     private distDangerMaterial: StandardMaterial;
     private distAnchors: Entity[] = [];
     // visibility of the distance indicators (green/red lines + anchors),
-    // toggled from the panel and preserved across route regeneration
-    private distIndicatorsVisible = true;
+    // toggled from the panel and preserved across route regeneration;
+    // shortest-distance indicator lines start hidden (eye button toggles)
+    private distIndicatorsVisible = false;
 
     // bounding box of the device selected in the ledger panel (orange wireframe)
     private deviceBoxEntity: Entity | null = null;
