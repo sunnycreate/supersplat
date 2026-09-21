@@ -560,10 +560,9 @@ class WaypointCameraRig {
 
     private ensureFrustum() {
         if (this.frustumEntity) return;
-        this.frustumMeshes = this.buildFrustumMeshes(
-            vFovDeg(FOCAL_DEFAULT), hFovDeg(FOCAL_DEFAULT),
-            this.scene.bound.halfExtents.length() * FRUSTUM_DEPTH_RATIO
-        );
+        // unit-depth pyramid: the real depth is set per-waypoint via local
+        // scale in refreshFrustum (the terminal plane lands on the subject)
+        this.frustumMeshes = this.buildFrustumMeshes(vFovDeg(FOCAL_DEFAULT), hFovDeg(FOCAL_DEFAULT), 1);
         this.frustumEntity = new Entity('waypointFrustum');
         this.frustumEntity.addComponent('render', {
             meshInstances: [
@@ -585,10 +584,8 @@ class WaypointCameraRig {
 
         if (this.frustumFocal !== attitude.focal) {
             this.frustumFocal = attitude.focal;
-            const meshes = this.buildFrustumMeshes(
-                vFovDeg(attitude.focal), hFovDeg(attitude.focal),
-                this.scene.bound.halfExtents.length() * FRUSTUM_DEPTH_RATIO
-            );
+            // unit-depth mesh; scale stretches it along the view rays below
+            const meshes = this.buildFrustumMeshes(vFovDeg(attitude.focal), hFovDeg(attitude.focal), 1);
             this.frustumMeshes?.faces.destroy();
             this.frustumMeshes?.edges.destroy();
             this.frustumMeshes = meshes;
@@ -600,6 +597,16 @@ class WaypointCameraRig {
         this.frustumEntity.setLocalPosition(this.selected.getLocalPosition());
         attitudeQuat(attitude, tmpQuat);
         this.frustumEntity.setLocalRotation(tmpQuat);
+
+        // stretch the unit pyramid so the terminal plane sits exactly on the
+        // sampled surface point this waypoint shoots: the cap is then glued
+        // to the filmed surface (depth-tested, no floating-plane parallax)
+        // and directly comparable with the pip picture. without a subject,
+        // fall back to the fixed ratio depth.
+        const radius = this.scene.bound.halfExtents.length();
+        const shoot = this.shootDist(this.selected.getLocalPosition(), this.selected);
+        const depth = shoot > 0 ? Math.min(Math.max(shoot, 0.5), radius) : radius * FRUSTUM_DEPTH_RATIO;
+        this.frustumEntity.setLocalScale(depth, depth, depth);
     }
 
     // per-waypoint short direction lines (simplified indicator)
