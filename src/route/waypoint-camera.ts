@@ -256,10 +256,14 @@ class WaypointCameraRig {
         });
         window.addEventListener('keyup', (e: KeyboardEvent) => {
             const dir = this.keyToDir(e.key);
-            if (dir) {
-                this.moveDirs.delete(dir);
-                if (this.moveDirs.size === 0) {
+            // endMove() early-returns on an empty moveDirs, so it must run
+            // while the released key is still in the set — otherwise the
+            // route would never redraw after an arrow-key move
+            if (dir && this.moveDirs.has(dir)) {
+                if (this.moveDirs.size === 1) {
                     this.endMove();
+                } else {
+                    this.moveDirs.delete(dir);
                 }
             }
         });
