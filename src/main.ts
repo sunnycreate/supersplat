@@ -37,6 +37,7 @@ import { ToolManager } from './tools/tool-manager';
 import { registerTrackManagerEvents } from './track-manager';
 import { registerTransformHandlerEvents } from './transform-handler';
 import { BoundDimensionsOverlay } from './ui/bound-dimensions-overlay';
+import { sceneHoverLabel } from './ui/scene-hover-label';
 import { EditorUI } from './ui/editor';
 import { i18n } from './ui/localization';
 import { registerSelectCursor } from './ui/select-cursor';
@@ -260,6 +261,9 @@ const main = async () => {
     toolManager.register('orient', new OrientTool(events, scene, editorUI.toolsContainer.dom, editorUI.canvasContainer));
 
     const boundDimensionsOverlay = new BoundDimensionsOverlay(events, scene, editorUI.canvasContainer);
+
+    // floating name label above the marker hovered from the sample/waypoint lists
+    sceneHoverLabel.init(events, scene, editorUI.canvasContainer.dom);
 
     editorUI.toolsContainer.dom.appendChild(maskCanvas);
 

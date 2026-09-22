@@ -365,11 +365,11 @@ class SamplePointTool {
         });
 
         // highlight/unhighlight a marker (e.g. when hovering a panel row)
-        events.on('samplePoint.highlight', (marker: Entity) => {
-            this.highlightMarker(marker);
+        events.on('samplePoint.highlight', (data: { marker: Entity }) => {
+            this.highlightMarker(data.marker);
         });
-        events.on('samplePoint.unhighlight', (marker: Entity) => {
-            this.unhighlightMarker(marker);
+        events.on('samplePoint.unhighlight', (data: { marker: Entity }) => {
+            this.unhighlightMarker(data.marker);
         });
 
         // generate waypoints and route line from sample points

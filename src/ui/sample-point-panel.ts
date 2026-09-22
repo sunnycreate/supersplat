@@ -732,12 +732,12 @@ class SamplePointPanel extends Container {
             this.deletePoint(folder.id, point.id);
         });
 
-        // ── hover: highlight the corresponding marker in 3D ──
+        // ── hover: highlight the corresponding marker in 3D (+ name label) ──
         item.dom.addEventListener('pointerenter', () => {
-            this.events.fire('samplePoint.highlight', point.markerEntity);
+            this.events.fire('samplePoint.highlight', { marker: point.markerEntity, name: point.name });
         });
         item.dom.addEventListener('pointerleave', () => {
-            this.events.fire('samplePoint.unhighlight', point.markerEntity);
+            this.events.fire('samplePoint.unhighlight', { marker: point.markerEntity });
         });
 
         // ── click: fly the camera to this sample point ──

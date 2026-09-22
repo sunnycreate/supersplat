@@ -180,10 +180,10 @@ class WaypointList extends Container {
 
             // hover to highlight the waypoint
             row.dom.addEventListener('pointerenter', () => {
-                this.events.fire('samplePoint.highlight', wp.markerEntity);
+                this.events.fire('samplePoint.highlight', { marker: wp.markerEntity, name: wp.name });
             });
             row.dom.addEventListener('pointerleave', () => {
-                this.events.fire('samplePoint.unhighlight', wp.markerEntity);
+                this.events.fire('samplePoint.unhighlight', { marker: wp.markerEntity });
             });
 
             // click to fly the camera to this waypoint

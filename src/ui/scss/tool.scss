@@ -60,3 +60,21 @@
         }
     }
 }
+
+// floating name label above the 3D marker whose list row is hovered
+// (see scene-hover-label.ts)
+.scene-hover-label {
+    position: absolute;
+    z-index: 10;
+    display: none;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: rgba(20, 22, 26, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    color: #fff;
+    font-size: 11px;
+    line-height: 14px;
+    white-space: nowrap;
+    pointer-events: none;
+    user-select: none;
+}
