@@ -703,9 +703,12 @@ class SamplePointPanel extends Container {
         // place the row at the point's list position, before the waypoint section
         const index = folder.points.indexOf(point);
         const nextPoint = folder.points[index + 1];
-        const refDom = (nextPoint && folderEl.items.get(nextPoint.id)?.dom) || folderEl.waypointList?.dom || null;
-        if (refDom && refDom.parentNode === folderEl.content.dom) {
-            folderEl.content.dom.insertBefore(item.dom, refDom);
+        const refElement = (nextPoint && folderEl.items.get(nextPoint.id)) || folderEl.waypointList || null;
+        if (refElement) {
+            // appendBefore keeps PCUI parenting in sync — a raw dom insertBefore
+            // would make the later content.remove() a silent no-op and the row
+            // could never be deleted from the list
+            folderEl.content.appendBefore(item, refElement);
         } else {
             folderEl.content.append(item);
         }
