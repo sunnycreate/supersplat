@@ -189,9 +189,10 @@ const solveHoverPoint = (
     samplePos: Vec3,
     fallbackNormal: Vec3,
     config: SafetyConfig
-): { position: Vec3; ok: boolean; clearance: number } => {
+): { position: Vec3; ok: boolean; clearance: number; normal: Vec3 } => {
     const normal = new Vec3();
-    if (!surfaceNormal(field, samplePos, config, normal)) {
+    const surfaceNormalOk = surfaceNormal(field, samplePos, config, normal);
+    if (!surfaceNormalOk) {
         normal.copy(fallbackNormal);
         if (normal.lengthSq() < 1e-8) {
             normal.set(0, 1, 0);
@@ -199,13 +200,38 @@ const solveHoverPoint = (
         normal.normalize();
     }
 
-    // orient the normal towards the open side
-    const d0 = Math.max(config.minDistance, config.hoverDistance);
-    tmpA.copy(samplePos).add(tmpB.copy(normal).mulScalar(d0));
-    const plusClearance = field.clearance(tmpA);
-    tmpC.copy(samplePos).add(tmpB.copy(normal).mulScalar(-d0));
-    if (field.clearance(tmpC) > plusClearance) {
-        normal.mulScalar(-1);
+    // fallback sign decision: compare clearance at ±d0 probes. the unsigned
+    // field makes this ambiguous on thin shells (underground looks just as
+    // open as the sky), so it is only used when no view-direction prior
+    // exists or the PCA axis is orthogonal to it.
+    const orientByProbes = () => {
+        const d0 = Math.max(config.minDistance, config.hoverDistance);
+        tmpA.copy(samplePos).add(tmpB.copy(normal).mulScalar(d0));
+        const plusClearance = field.clearance(tmpA);
+        tmpC.copy(samplePos).add(tmpB.copy(normal).mulScalar(-d0));
+        if (field.clearance(tmpC) > plusClearance) {
+            normal.mulScalar(-1);
+        }
+    };
+
+    if (surfaceNormalOk) {
+        if (fallbackNormal.lengthSq() > 1e-8) {
+            // the click that placed the sample point captured the view
+            // direction: the outward side always faces the camera. PCA only
+            // yields an unsigned axis, so fix its sign against the view —
+            // ground samples then keep pointing up instead of being flipped
+            // underground by near-symmetric clearance probes.
+            const dot = normal.dot(fallbackNormal);
+            if (dot < -0.3) {
+                normal.mulScalar(-1);
+            } else if (dot <= 0.3) {
+                // axis disagrees with the view (degenerate neighbourhood) —
+                // keep the PCA axis and let the probes decide the sign
+                orientByProbes();
+            }
+        } else {
+            orientByProbes();
+        }
     }
 
     const hard = hardClearance(config);
@@ -266,10 +292,10 @@ const solveHoverPoint = (
     const found = search(target) ?? search(hard) ?? straightOut(target) ?? straightOut(hard);
 
     if (!found) {
-        return { position: samplePos.clone(), ok: false, clearance: -1 };
+        return { position: samplePos.clone(), ok: false, clearance: -1, normal: normal.clone() };
     }
 
-    return { position: found.position, ok: true, clearance: found.clearance };
+    return { position: found.position, ok: true, clearance: found.clearance, normal: normal.clone() };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

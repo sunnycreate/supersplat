@@ -169,6 +169,10 @@ class SamplePointTool {
     private distMaterial: StandardMaterial;
     private distDangerMaterial: StandardMaterial;
     private distAnchors: Entity[] = [];
+    // debug: red lines showing the oriented surface normal the solver actually
+    // used per sample point (drawn during route generation)
+    private normalLine: { entity: Entity | null; mesh: Mesh | null } = { entity: null, mesh: null };
+    private normalMaterial: StandardMaterial;
     // visibility of the distance indicators (green/red lines + anchors),
     // toggled from the panel and preserved across route regeneration;
     // shortest-distance indicator lines start hidden (eye button toggles)
@@ -215,6 +219,7 @@ class SamplePointTool {
         this.distMaterial = this.makeLineMaterial(new Color(0.098, 1, 0.137));
         this.distDangerMaterial = this.makeLineMaterial(new Color(1, 0.15, 0.1));
         this.deviceBoxMaterial = this.makeLineMaterial(new Color(1, 0.55, 0.05));
+        this.normalMaterial = this.makeLineMaterial(new Color(1, 0.1, 0.1));
 
         this.cameraRig = new WaypointCameraRig(events, scene);
 
@@ -739,6 +744,7 @@ class SamplePointTool {
         this.disposeLine(this.routeLine);
         this.disposeLine(this.distLine);
         this.disposeLine(this.distLineDanger);
+        this.disposeLine(this.normalLine);
         this.distAnchors.length = 0;
         if (this.routeEntity) {
             this.routeEntity.destroy();
@@ -1264,6 +1270,8 @@ class SamplePointTool {
 
         const waypointData: { position: Vec3; markerEntity: Entity; viewDir: Vec3; subject: Vec3; subjectMarker?: Entity }[] = [];
         const unsolvable: number[] = [];
+        // per-point normal the solver oriented and searched around (debug draw)
+        const debugNormals: Vec3[] = [];
 
         for (let i = 0; i < points.length; i++) {
             const point = points[i];
@@ -1271,6 +1279,9 @@ class SamplePointTool {
             let hoverPos: Vec3;
             if (ready) {
                 const solved = solveHoverPoint(this.clearance, point.position, point.normal, this.clearance.config);
+                // remember the oriented normal even for skipped points — that
+                // is exactly where a wrong direction shows up
+                debugNormals.push(solved.normal);
                 if (!solved.ok) {
                     // no safe hover point exists: skip it rather than emitting a
                     // waypoint that would fly into the model
@@ -1279,6 +1290,7 @@ class SamplePointTool {
                 }
                 hoverPos = solved.position;
             } else {
+                debugNormals.push(point.normal);
                 // no obstacle field: fall back to the plain normal offset
                 const offset = this.clearance.config.hoverDistance;
                 hoverPos = new Vec3(
@@ -1311,6 +1323,22 @@ class SamplePointTool {
 
         scene.app.root.addChild(routeEntity);
         this.routeEntity = routeEntity;
+
+        // debug: draw the oriented surface normal of every sample point as a
+        // red line (length = the solver's primary search distance), so a wrong
+        // direction is visible right where the waypoint went wrong
+        const normalLen = this.clearance.config.hoverDistance;
+        const normalPositions: number[] = [];
+        for (let i = 0; i < points.length; i++) {
+            const p = points[i].position;
+            const n = debugNormals[i];
+            if (!n) continue;
+            normalPositions.push(
+                p.x, p.y, p.z,
+                p.x + n.x * normalLen, p.y + n.y * normalLen, p.z + n.z * normalLen
+            );
+        }
+        this.setLine(routeEntity, this.normalLine, 'normalLines', normalPositions, this.normalMaterial, this.scene.overlayLayer.id);
 
         // container for the per-waypoint distance indicators
         const distEntity = new Entity('sampleDistances');
