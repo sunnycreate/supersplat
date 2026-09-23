@@ -147,6 +147,12 @@ class SamplePointTool {
     private root: Entity | null = null;
     // entity that holds generated waypoints and route line
     private routeEntity: Entity | null = null;
+    // sample points and oriented normals behind the red normal debug lines of
+    // the last route generation; kept so a moved sample point can re-orient
+    // its line (positions are the panel's live objects, updated in place)
+    private debugPoints: { position: Vec3; normal: Vec3; marker?: Entity }[] | null = null;
+    private debugNormals: Vec3[] | null = null;
+    private debugFieldReady = false;
     // route visuals (tube, arrows, distance indicator and normal debug lines)
     // are drawn by the overlay; the tool keeps interaction and orchestration
     private overlay: RouteOverlay;
@@ -353,6 +359,23 @@ class SamplePointTool {
         // generate waypoints and route line from sample points
         events.on('samplePoint.generateRoute', (points: { position: Vec3; normal: Vec3; marker?: Entity }[]) => {
             this.generateRoute(points);
+        });
+
+        // a sample point moved after route generation: re-orient its normal at
+        // the new position so the red debug line keeps showing the direction
+        // the solver would use there
+        events.on('samplePoint.moved', (data: { marker: Entity; position: Vec3 }) => {
+            if (!this.debugPoints || !this.debugNormals) return;
+            const i = this.debugPoints.findIndex((p) => p.marker === data.marker);
+            if (i < 0) return;
+            const point = this.debugPoints[i];
+            point.position.copy(data.position);
+            if (this.debugFieldReady) {
+                this.debugNormals[i] = solveHoverPoint(this.clearance, point.position, point.normal, this.clearance.config).normal;
+            } else {
+                this.debugNormals[i] = point.normal;
+            }
+            this.overlay.setNormalDebug(this.debugPoints, this.debugNormals);
         });
 
         // toggle route editing mode (enables waypoint picking/moving)
@@ -712,6 +735,8 @@ class SamplePointTool {
         this.markerLevels.clear();
         this.legCache.clear();
         this.overlay.clear();
+        this.debugPoints = null;
+        this.debugNormals = null;
         if (this.routeEntity) {
             this.routeEntity.destroy();
             this.routeEntity = null;
@@ -1122,6 +1147,9 @@ class SamplePointTool {
         this.routeEntity = routeEntity;
 
         this.overlay.setNormalDebug(points, debugNormals);
+        this.debugPoints = points;
+        this.debugNormals = debugNormals;
+        this.debugFieldReady = ready;
         this.overlay.createDistEntity();
 
         scene.forceRender = true;
