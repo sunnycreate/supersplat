@@ -260,8 +260,15 @@ class WaypointEditPanel extends Container {
             }
 
             this.marker = data.marker;
-            // 转折点只保留位置编辑：云台/焦距滑条、拍摄距离全部隐藏
+            // 转折点/起飞点只保留位置编辑：云台/焦距滑条、拍摄距离全部隐藏
+            // （起飞点由采样点工具映射为 kind:'turn'，共用同一分支）
             this.setTurnMode(data.kind === 'turn');
+            if (data.kind === 'turn') {
+                // 仅位置提示文案按类型区分
+                this.turnHint.text = data.marker.name === 'homepoint'
+                    ? '起飞点/返航点 · 仅可调整位置'
+                    : '转折点 · 仅可调整位置';
+            }
             this.applyAttitude(data.attitude);
             // this.yaw holds the RELATIVE gimbal yaw (panel semantics)
             this.yaw = data.relativeYaw ?? 0;

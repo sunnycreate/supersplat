@@ -18,6 +18,9 @@ const CLICK_TOLERANCE = 4;
 // screen-space pick radius for selecting an existing marker (pixels)
 const MARKER_PICK_RADIUS = 12;
 
+// 起飞点/返航点小球的颜色（与航线管线同一绿色系）
+const HOME_COLOR = new Color(0.16, 0.75, 0.32);
+
 // temp vectors (module-scope to avoid per-frame allocations)
 const tmpScreen = new Vec3();
 const tmpWorld = new Vec3();
@@ -49,7 +52,8 @@ interface RouteEntryData {
     position: Vec3;
 }
 
-// 航点导出行：kind 区分拍照点/转折点（新增字段，向后兼容）；转折点无云台字段
+// 航点导出行：kind 区分拍照点/转折点/起飞返航点（新增字段，向后兼容）；
+// 转折点与起飞返航点均无云台字段
 type ExportRow = {
     index: number;
     name: string;
@@ -61,7 +65,7 @@ type ExportRow = {
 } | {
     index: number;
     name: string;
-    kind: 'turn';
+    kind: 'turn' | 'home';
     lon: number | null;
     lat: number | null;
     alt: number | null;
@@ -213,6 +217,10 @@ class SamplePointTool {
     private cachedFieldVersion = '';
     // when true, surface clicks don't create new markers; waypoint dragging is enabled
     private routeEditMode = false;
+    // 起飞点/返航点实体（绿色小球，挂在 routeEntity 下）；null = 未放置
+    private homePoint: Entity | null = null;
+    // true = 正在等待用户点击场景放置起飞点（点击不再创建采样点）
+    private homePlacing = false;
     private active = false;
 
     // gizmo for moving markers
@@ -273,6 +281,11 @@ class SamplePointTool {
                         // 只重画航线并重测与它相连的航段，不走完整校验管线
                         this.updateForTurnMove(this.selectedMarker);
                         events.fire('waypoint.moved', this.selectedMarker, newPos.clone());
+                    } else if (this.selectedMarker.name === 'homepoint') {
+                        // 起飞点：重绘航线（含首尾蓝色接线）并重新校验；起飞点
+                        // 与其接线不进条目序列，不参与净空校验与转折点生成
+                        this.updateRouteLine();
+                        events.fire('waypoint.moved', this.selectedMarker, newPos.clone());
                     } else {
                         // do() re-applies the position the gizmo already set
                         // (idempotent) and fires 'samplePoint.moved' so the
@@ -321,6 +334,15 @@ class SamplePointTool {
                         this.deselectMarker();
                     } else {
                         this.selectMarker(hit);
+                    }
+                } else if (this.homePlacing) {
+                    // 起飞点放置状态：在拾取命中点创建起飞点/返航点（此分支
+                    // 挡在采样点绘制路径之前，放置期间的点击不再创建采样点）
+                    const x = this.clickX / this.canvasContainer.clientWidth;
+                    const y = this.clickY / this.canvasContainer.clientHeight;
+                    const result = await scene.camera.intersect(x, y);
+                    if (result) {
+                        this.placeHomePoint(result.position);
                     }
                 } else if (this.routeEditMode) {
                     // in route edit mode, clicking empty space just deselects
@@ -466,6 +488,23 @@ class SamplePointTool {
             this.selectMarker(marker);
         });
 
+        // 航点列表"添加起飞点/返航点"按钮：进入放置状态，点击场景的拾取
+        // 命中点创建起飞点。已有起飞点或没有航线时忽略
+        events.on('route.home.requestPlace', () => {
+            if (this.homePoint || !this.routeEntity) return;
+            // 确保采样点工具处于激活态（列表在航线模式下通常已激活；从别的
+            // 工具切回时重新接管指针事件）。active 时不能重复 fire，否则
+            // ToolManager 会把当前工具 toggle 成关闭
+            if (this.events.invoke('tool.active') !== 'samplePoint') {
+                this.events.fire('tool.samplePoint');
+            }
+            this.homePlacing = true;
+            // 退出采样点绘制状态：收起 gizmo，放置期间的点击由 pointerup 的
+            // homePlacing 分支接管，不再走 createMarker
+            this.deselectMarker();
+            this.events.fire('route.home.placing', true);
+        });
+
         // export the waypoint list (lon/lat/alt) to the console (panel button)
         events.on('waypoint.export', (waypoints: { name: string; position: Vec3; markerEntity: Entity }[]) => {
             this.exportWaypoints(waypoints);
@@ -572,11 +611,57 @@ class SamplePointTool {
         material.update();
     }
 
-    // highlight a marker: sky blue for waypoints, orange for sample points
+    // 起飞点/返航点小球实体（未加入场景）：绿色，比拍照航点略小（80% 半径，
+    // 与转折点同一套场景尺度逻辑）
+    private makeHomePointEntity(position: Vec3): Entity {
+        const { scene } = this;
+
+        const sceneRadius = scene.bound.halfExtents.length();
+        const radius = Math.max(sceneRadius * 0.002 / 3, 0.0005 / 3) * 0.8;
+
+        const entity = new Entity('homepoint');
+        entity.addComponent('render', { type: 'sphere' });
+
+        const material = new StandardMaterial();
+        material.diffuse = HOME_COLOR.clone();
+        material.emissive = HOME_COLOR.clone();
+        material.metalness = 0;
+        material.update();
+
+        entity.render.meshInstances[0].material = material;
+        entity.render.layers = [scene.worldLayer.id];
+
+        const s = radius * 2;
+        entity.setLocalScale(s, s, s);
+        entity.setLocalPosition(position);
+
+        return entity;
+    }
+
+    // 在拾取命中点放置起飞点/返航点（route.home.requestPlace 进入的放置
+    // 状态下点击场景触发），随后重绘航线并触发完整校验
+    private placeHomePoint(position: Vec3) {
+        if (this.homePoint || !this.routeEntity) return;
+
+        // 挂在 routeEntity 下，与拍照航点同层，随航线一起清除
+        this.homePoint = this.makeHomePointEntity(position);
+        this.routeEntity.addChild(this.homePoint);
+
+        // 退出放置状态并广播：先复位按钮，再通知列表切换为信息行
+        this.homePlacing = false;
+        this.events.fire('route.home.placing', false);
+        this.events.fire('route.home.state', this.homePoint);
+
+        // 重绘航线（含首尾起飞点接线）并走完整校验管线刷新报告
+        this.updateRouteLine();
+        this.scene.forceRender = true;
+    }
+
+    // highlight a marker: sky blue for waypoints / home point, orange for sample points
     private highlightMarker(marker: Entity) {
         if (!marker.render) return;
         const material = marker.render.meshInstances[0].material as StandardMaterial;
-        const isWaypoint = marker.name === 'waypoint' || marker.name === 'turnpoint';
+        const isWaypoint = marker.name === 'waypoint' || marker.name === 'turnpoint' || marker.name === 'homepoint';
         const color = isWaypoint ? new Color(0, 0.8, 1) : new Color(1, 0.5, 0);
         material.diffuse = color;
         material.emissive = color;
@@ -585,12 +670,15 @@ class SamplePointTool {
     }
 
     // unhighlight a marker: restore its base color (yellow for sample points,
-    // safety-graded blue/amber/red for waypoints, orange/red for turn points)
+    // safety-graded blue/amber/red for waypoints, orange/red for turn points,
+    // green for the home point)
     private unhighlightMarker(marker: Entity) {
         if (!marker.render) return;
         const material = marker.render.meshInstances[0].material as StandardMaterial;
         let restore: Color;
-        if (marker.name === 'turnpoint') {
+        if (marker.name === 'homepoint') {
+            restore = HOME_COLOR.clone();
+        } else if (marker.name === 'turnpoint') {
             restore = this.turnColor(this.markerLevels.get(marker) ?? SafetyLevel.unknown);
         } else if (marker.name === 'waypoint') {
             restore = levelColor(this.markerLevels.get(marker) ?? SafetyLevel.unknown);
@@ -718,11 +806,24 @@ class SamplePointTool {
         return { lat, lon, alt: projZ };
     }
 
+    // 起飞点/返航点导出行：kind:'home'（仅坐标，无云台字段）
+    private makeHomeExportRow(index: number): ExportRow {
+        const wgs84 = this.sceneToWgs84(this.homePoint!.getLocalPosition());
+        return {
+            index,
+            name: '起飞点/返航点',
+            kind: 'home',
+            lon: wgs84 ? +wgs84.lon.toFixed(8) : null,
+            lat: wgs84 ? +wgs84.lat.toFixed(8) : null,
+            alt: wgs84 ? +wgs84.alt.toFixed(3) : null
+        };
+    }
+
     // log the waypoint list to the console, each entry with its WGS84
     // lon/lat/alt. positions prefer the live (possibly dragged) marker
     // position, falling back to the generation-time position.
     private exportWaypoints(waypoints: { name: string; position: Vec3; markerEntity: Entity }[]) {
-        if (waypoints.length === 0) {
+        if (waypoints.length === 0 && !this.homePoint) {
             // eslint-disable-next-line no-console
             console.log('[Waypoint] 没有可导出的航点');
             return;
@@ -735,7 +836,13 @@ class SamplePointTool {
             live.set(entry.entity, entry.entity.getLocalPosition().clone());
         }
 
-        const rows: ExportRow[] = waypoints.map((wp, i) => {
+        const rows: ExportRow[] = [];
+        // 有起飞点时首尾各加一行起飞点（kind:'turn'，仅坐标无云台字段），
+        // 后续拍照/转折点序号整体顺延
+        if (this.homePoint) {
+            rows.push(this.makeHomeExportRow(rows.length + 1));
+        }
+        for (const wp of waypoints) {
             const position = live.get(wp.markerEntity) ?? wp.position;
             const wgs84 = this.sceneToWgs84(position);
             const coord = {
@@ -745,17 +852,21 @@ class SamplePointTool {
             };
             if (wp.markerEntity.name === 'turnpoint') {
                 // 转折点：仅位置信息，无云台姿态/拍摄任务
-                return { index: i + 1, name: wp.name, kind: 'turn', ...coord };
+                rows.push({ index: rows.length + 1, name: wp.name, kind: 'turn', ...coord });
+            } else {
+                rows.push({
+                    index: rows.length + 1,
+                    name: wp.name,
+                    kind: 'shot',
+                    ...coord,
+                    // gimbal attitude + distances (PRD P1)
+                    gimbal: this.cameraRig.getExportData(wp.markerEntity)
+                });
             }
-            return {
-                index: i + 1,
-                name: wp.name,
-                kind: 'shot',
-                ...coord,
-                // gimbal attitude + distances (PRD P1)
-                gimbal: this.cameraRig.getExportData(wp.markerEntity)
-            };
-        });
+        }
+        if (this.homePoint) {
+            rows.push(this.makeHomeExportRow(rows.length + 1));
+        }
 
         // eslint-disable-next-line no-console
         console.log(`[Waypoint] 航点列表（共 ${rows.length} 个）:`);
@@ -763,9 +874,11 @@ class SamplePointTool {
             const coord = row.lon === null
                 ? '无地理元数据（场景坐标不可导出 lon/lat/alt）'
                 : `lon=${row.lon}, lat=${row.lat}, alt=${row.alt}`;
-            const detail = row.kind === 'turn'
-                ? '转折点（无云台任务）'
-                : `yaw(相对航线)=${row.gimbal.yaw}° pitch=${row.gimbal.pitch}° focal=${row.gimbal.focal}mm | 对地=${row.gimbal.groundDist}m 拍摄=${row.gimbal.shootDist}m`;
+            const detail = row.kind === 'shot'
+                ? `yaw(相对航线)=${row.gimbal.yaw}° pitch=${row.gimbal.pitch}° focal=${row.gimbal.focal}mm | 对地=${row.gimbal.groundDist}m 拍摄=${row.gimbal.shootDist}m`
+                : row.kind === 'turn'
+                    ? '转折点（无云台任务）'
+                    : '起飞点/返航点（无云台任务）';
             // eslint-disable-next-line no-console
             console.log(`[Waypoint] ${row.name}: ${coord} | ${detail}`);
         }
@@ -776,17 +889,38 @@ class SamplePointTool {
     private selectMarker(marker: Entity) {
         this.selectedMarker = marker;
         this.gizmo.attach(marker);
-        // waypoints drive the gimbal rig (frustum + preview); sample points
-        // just get the gizmo
-        this.cameraRig.select(marker);
+        if (marker.name === 'homepoint') {
+            // 起飞点没有云台任务：云台 rig 不识别 homepoint（会被当作取消
+            // 选中），先清掉上一个航点的视锥/画中画，再按转折点同款语义
+            // （kind:'turn'）通知编辑面板进入仅位置调整模式
+            this.cameraRig.deselect();
+            const position = marker.getLocalPosition();
+            const bound = this.scene.bound;
+            this.events.fire('waypointAttitude.selected', {
+                marker,
+                position: position.clone(),
+                groundDist: +(position.y - (bound.center.y - bound.halfExtents.y)).toFixed(3),
+                kind: 'turn' as const
+            });
+        } else {
+            // waypoints drive the gimbal rig (frustum + preview); sample points
+            // just get the gizmo
+            this.cameraRig.select(marker);
+        }
         this.scene.forceRender = true;
     }
 
     private deselectMarker() {
+        const wasHome = this.selectedMarker?.name === 'homepoint';
         this.selectedMarker = null;
         this.gizmo.detach();
         this.dragStartPos = null;
         this.cameraRig.deselect();
+        if (wasHome) {
+            // 起飞点选中未经过云台 rig，rig 的取消选中不会广播，这里补发
+            // 取消选中让编辑面板收起
+            this.events.fire('waypointAttitude.selected', { marker: null });
+        }
         this.scene.forceRender = true;
     }
 
@@ -827,11 +961,11 @@ class SamplePointTool {
             }
         }
 
-        // check waypoints (photo waypoints + turn points)
+        // check waypoints (photo waypoints + turn points + home point)
         if (this.routeEntity) {
             for (const child of this.routeEntity.children) {
                 const name = (child as Entity).name;
-                if (name === 'waypoint' || name === 'turnpoint') {
+                if (name === 'waypoint' || name === 'turnpoint' || name === 'homepoint') {
                     check(child as Entity);
                 }
             }
@@ -859,6 +993,14 @@ class SamplePointTool {
         // 转折点条目随 routeEntity 一并销毁，扁平条目序列同步清空
         this.routeEntries = [];
         this.legKeys = [];
+        // 起飞点随航线一并销毁；复位放置状态并广播给航点列表
+        if (this.homePoint) {
+            this.homePoint.destroy();
+            this.homePoint = null;
+        }
+        this.homePlacing = false;
+        this.events.fire('route.home.state', null);
+        this.events.fire('route.home.placing', false);
         this.overlay.clear();
         this.debugPoints = null;
         this.debugNormals = null;
@@ -1332,7 +1474,14 @@ class SamplePointTool {
 
     // the route visuals (tube, arrows) are drawn by the overlay
     private drawRoute(path: Vec3[]) {
-        this.overlay.setRoute(path);
+        // 起飞点接线：路径首尾各接起飞点（起飞→首个拍照点、末拍照点→返航，
+        // overlay 里这两段以蓝色绘制）；没有拍照航点时只剩起飞点自身
+        // （path 长度 1，overlay 只画关节球不画管）
+        if (this.homePoint) {
+            const home = this.homePoint.getLocalPosition().clone();
+            path = path.length > 0 ? [home, ...path, home] : [home];
+        }
+        this.overlay.setRoute(path, !!this.homePoint);
     }
 
     // redraw the route from the current entry positions (含转折点) and re-plan it

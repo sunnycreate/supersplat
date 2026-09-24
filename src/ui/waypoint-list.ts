@@ -59,6 +59,16 @@ class WaypointList extends Container {
     // (indicators start hidden when a route is generated)
     private distVisible = false;
 
+    // 起飞点/返航点：已放置实体（null = 未放置，首行显示添加按钮）与工具
+    // 侧的放置中状态（按钮进入激活态）
+    private homeMarker: Entity | null = null;
+    private homePlacing = false;
+    // 最近一次 setEntries 的条目；起飞点状态变化时整表重建首行用
+    private lastEntries: { marker: Entity; kind: 'shot' | 'turn'; position: Vec3; name: string }[] | null = null;
+    // 当前渲染的添加按钮行与文案标签（放置态样式切换用）
+    private homeAddRow: Container | null = null;
+    private homeAddLabel: Label | null = null;
+
     constructor(events: Events, tooltips: Tooltips, options: { onDelete?: () => void } = {}) {
         super({ class: 'sample-waypoint-section' });
 
@@ -141,6 +151,20 @@ class WaypointList extends Container {
             this.setDistVisible(visible);
         });
 
+        // 起飞点放置状态（工具确认后广播）：添加按钮进入/退出激活态
+        events.on('route.home.placing', (placing: boolean) => {
+            this.homePlacing = placing;
+            this.applyHomeAddState();
+        });
+
+        // 起飞点实体变化（放置成功 / 随航线清除）：整表重建以切换首行形态
+        events.on('route.home.state', (marker: Entity | null) => {
+            this.homeMarker = marker;
+            if (this.lastEntries) {
+                this.setEntries(this.lastEntries);
+            }
+        });
+
         tooltips.register(deleteBtn, () => i18n.t('tooltip.samplePoint.deleteFolder'), 'left');
         tooltips.register(validateBtn, () => '安全校验：测量航点与航线到模型的距离', 'left');
         tooltips.register(exportBtn, () => '导出航点信息', 'left');
@@ -162,6 +186,12 @@ class WaypointList extends Container {
     // 按航线顺序混排；由 route.entries 驱动）
     setEntries(entries: { marker: Entity; kind: 'shot' | 'turn'; position: Vec3; name: string }[]) {
         this.clear();
+
+        // 记录条目，供起飞点状态变化（放置成功/清除）时整表重建
+        this.lastEntries = entries;
+
+        // 首行：起飞点信息行或"添加起飞点/返航点"按钮（在所有条目行之前）
+        this.renderHomeRow();
 
         for (const wp of entries) {
             const entry: WaypointEntry = {
@@ -269,9 +299,81 @@ class WaypointList extends Container {
         return dirty;
     }
 
+    // 首行：已放置时显示起飞点信息行（坐标逻辑与转折点行一致，可点击聚焦/
+    // 选中，无删除按钮），未放置时显示整行"添加起飞点/返航点"按钮
+    private renderHomeRow() {
+        this.homeAddRow = null;
+        this.homeAddLabel = null;
+
+        if (this.homeMarker) {
+            const marker = this.homeMarker;
+            const position = marker.getLocalPosition();
+            const row = new Container({ class: 'sample-waypoint-row' });
+            const name = new Label({
+                class: 'sample-point-name',
+                text: '起飞点/返航点'
+            });
+            row.append(name);
+
+            // 起飞点没有采样点，lat/lon 从实体位置经工具现有的 WGS84 转换
+            // 入口（route.toWgs84）现算，与转折点行相同
+            const wgs84 = this.events.invoke('route.toWgs84', position) as { lat: number; lon: number; alt: number } | null | undefined;
+            const info = new Label({
+                class: 'sample-wp-clearance',
+                text: wgs84
+                    ? `lat:${wgs84.lat.toFixed(4)}, lon:${wgs84.lon.toFixed(4)}, alt:${wgs84.alt.toFixed(1)}`
+                    : `(${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`
+            });
+            row.append(info);
+            this.listBody.append(row);
+
+            // hover 高亮与点击行为与转折点行一致
+            row.dom.addEventListener('pointerenter', () => {
+                this.events.fire('samplePoint.highlight', { marker, name: '起飞点/返航点' });
+            });
+            row.dom.addEventListener('pointerleave', () => {
+                this.events.fire('samplePoint.unhighlight', { marker });
+            });
+            row.dom.addEventListener('click', () => {
+                this.events.fire('samplePoint.focus', marker);
+                this.events.fire('route.entry.select', marker);
+            });
+            return;
+        }
+
+        // 未放置：整行按钮，点击请求工具进入放置状态（工具确认后广播
+        // route.home.placing 回来切换激活态）
+        const row = new Container({ class: 'sample-waypoint-row' });
+        const label = new Label({
+            class: 'sample-point-name',
+            text: '添加起飞点/返航点'
+        });
+        row.append(label);
+        row.on('click', () => {
+            this.events.fire('route.home.requestPlace');
+        });
+        this.listBody.append(row);
+
+        this.homeAddRow = row;
+        this.homeAddLabel = label;
+        this.applyHomeAddState();
+    }
+
+    // 添加按钮的放置中激活态：列表行没有现成的 active 样式类，沿用
+    // route-active 的配色（#555 底 + 白字）以行内样式实现
+    private applyHomeAddState() {
+        if (!this.homeAddRow || !this.homeAddLabel) return;
+        this.homeAddRow.dom.style.backgroundColor = this.homePlacing ? '#555' : '';
+        this.homeAddLabel.dom.style.color = this.homePlacing ? '#fff' : '';
+        this.homeAddRow.dom.title = this.homePlacing ? '点击场景放置起飞点/返航点' : '';
+    }
+
     // remove all waypoints
     clear() {
         this.entries = [];
+        this.lastEntries = null;
+        this.homeAddRow = null;
+        this.homeAddLabel = null;
         this.rows.clear();
         this.clearanceLabels.clear();
         this.bars.clear();

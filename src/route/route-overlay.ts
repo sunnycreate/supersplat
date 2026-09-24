@@ -111,10 +111,15 @@ function makeLineMaterial(color: Color) {
 // class from its route lifecycle.
 class RouteOverlay {
     // the route polyline is drawn as a green triangle tube (1px lines are too
-    // faint); direction arrows ride on it as camera-facing textured quads
+    // faint); direction arrows ride on it as camera-facing quads
     private routeTube: { entity: Entity | null; mesh: Mesh | null } = { entity: null, mesh: null };
+    // 起飞点接线的蓝色管段批次（与绿色拍照航段分开构建，材质各自独立）
+    private homeTube: { entity: Entity | null; mesh: Mesh | null } = { entity: null, mesh: null };
     private routeArrows: { entity: Entity | null; mesh: Mesh | null } = { entity: null, mesh: null };
     private lineMaterial: StandardMaterial;
+    // 起飞点接线（起飞→首个拍照点、末拍照点→返航）的蓝色材质：
+    // 与绿色管线同一套配置，仅改色
+    private homeLineMaterial: StandardMaterial;
     private arrowMaterial: StandardMaterial;
     // per-arrow anchor + forward direction (6 floats each) for the billboards
     private arrowData: number[] = [];
@@ -160,6 +165,9 @@ class RouteOverlay {
         // backface culling, so faces whose winding ends up away from the
         // camera would not vanish
         this.lineMaterial.twoSidedLighting = true;
+        // 起飞点接线的蓝色材质（克隆绿色管线的配置，仅改色）
+        this.homeLineMaterial = makeLineMaterial(new Color(0.15, 0.45, 1));
+        this.homeLineMaterial.twoSidedLighting = true;
         // direction arrows: unlit textured quads, cut out with alphaTest so no
         // transparency sorting against the route tube is needed. note: the
         // diffuse map's alpha is ignored by the engine — the opacity must come
@@ -222,9 +230,10 @@ class RouteOverlay {
     }
 
     // draw the route connector through the given polyline, with "<"-style
-    // chevrons showing the travel direction
-    setRoute(path: Vec3[]) {
-        this.setRouteTube(path);
+    // chevrons showing the travel direction. homeLegs 为 true 时首尾两段
+    // （起飞点↔拍照航点）以蓝色单独成批绘制
+    setRoute(path: Vec3[], homeLegs?: boolean) {
+        this.setRouteTube(path, homeLegs);
 
         // white direction arrows ride on the green tube as camera-facing quads
         const sceneRadius = this.scene.bound.halfExtents.length();
@@ -239,23 +248,37 @@ class RouteOverlay {
     // polyline: a 6-sided cylinder per segment plus a low-poly sphere per
     // vertex for rounded joints and caps. PRIMITIVE_LINES is hard-capped at
     // 1px width in WebGL, which makes the route nearly invisible.
-    private setRouteTube(path: Vec3[]) {
+    // homeLegs 为 true 时首段与末段是起飞点接线，以蓝色单独构建网格；
+    // path 长度为 1（只有起飞点、没有拍照航点）时只画关节球不画管
+    private setRouteTube(path: Vec3[], homeLegs?: boolean) {
         const line = this.routeTube;
         const parent = this.getParent();
         this.disposeLine(line);
-        if (!parent || path.length < 2) return;
+        this.disposeLine(this.homeTube);
+        if (!parent || path.length < 1) return;
 
         const radius = Math.max(this.scene.bound.halfExtents.length() * ROUTE_TUBE_RADIUS, 1e-4);
         const positions: number[] = [];
         const normals: number[] = [];
         const indices: number[] = [];
+        // 起飞点接线两段的蓝色批次（与绿色拍照航段分开，材质互不影响）
+        const homePositions: number[] = [];
+        const homeNormals: number[] = [];
+        const homeIndices: number[] = [];
         for (let i = 0; i < path.length - 1; i++) {
-            pushCylinder(positions, normals, indices, path[i], path[i + 1], radius);
+            const homeLeg = !!homeLegs && (i === 0 || i === path.length - 2);
+            const pos = homeLeg ? homePositions : positions;
+            const nor = homeLeg ? homeNormals : normals;
+            const idx = homeLeg ? homeIndices : indices;
+            pushCylinder(pos, nor, idx, path[i], path[i + 1], radius);
         }
         for (const v of path) {
             pushSphere(positions, normals, indices, v, radius);
         }
         this.finishTube(line, parent, 'routeTube', positions, normals, indices, this.lineMaterial);
+        if (homePositions.length > 0) {
+            this.finishTube(this.homeTube, parent, 'routeTubeHome', homePositions, homeNormals, homeIndices, this.homeLineMaterial);
+        }
     }
 
     // upload accumulated tube geometry as a triangle mesh under the route entity
@@ -568,6 +591,7 @@ class RouteOverlay {
     // owns the waypoint markers) is destroyed
     clear() {
         this.disposeLine(this.routeTube);
+        this.disposeLine(this.homeTube);
         this.disposeLine(this.routeArrows);
         this.arrowData.length = 0;
         this.disposeLine(this.distLine);
@@ -585,6 +609,7 @@ class RouteOverlay {
         this.events.off('prerender', this.updateBillboards, this);
         this.clear();
         this.lineMaterial.destroy();
+        this.homeLineMaterial.destroy();
         this.arrowMaterial.destroy();
         this.distMaterial.destroy();
         this.distDangerMaterial.destroy();
