@@ -35,6 +35,41 @@ interface LegPlan {
     point: Vec3;
 }
 
+// 航线扁平条目：拍照航点与转折点按航线顺序混排。转折点是绕行折线中
+// 方向显著变化的顶点，提升为真实条目后画线/校验都以条目序列为准
+interface RouteEntry {
+    kind: 'shot' | 'turn';
+    entity: Entity;
+}
+
+// route.entries 载荷元素：按序广播给面板重建航点列表行
+interface RouteEntryData {
+    marker: Entity;
+    kind: 'shot' | 'turn';
+    position: Vec3;
+}
+
+// 绕行顶点与前后方向夹角超过该阈值才保留为转折点（纯直行 cell 顶点丢弃）
+const TURN_ANGLE_THRESHOLD = 20; // deg
+
+// 航点导出行：kind 区分拍照点/转折点（新增字段，向后兼容）；转折点无云台字段
+type ExportRow = {
+    index: number;
+    name: string;
+    kind: 'shot';
+    lon: number | null;
+    lat: number | null;
+    alt: number | null;
+    gimbal: { yaw: number; pitch: number; focal: number; groundDist: number; shootDist: number };
+} | {
+    index: number;
+    name: string;
+    kind: 'turn';
+    lon: number | null;
+    lat: number | null;
+    alt: number | null;
+};
+
 // upper bound on cached legs before the oldest are dropped
 const LEG_CACHE_LIMIT = 512;
 
@@ -168,6 +203,15 @@ class SamplePointTool {
     private validationQueued = false;
     // leg plans keyed by their endpoints (see getLegPlan)
     private legCache = new Map<string, LegPlan>();
+    // 按航线顺序混排的条目（拍照航点 + 转折点）；位置以实体实时位置为准
+    private routeEntries: RouteEntry[] = [];
+    // 每个拍照航段上次同步转折点时的端点键：端点没动就跳过重新绕行，
+    // 这样拖动转折点后的重新校验不会把用户放置的位置覆盖回规划结果
+    private legKeys: string[] = [];
+    // 最近一次完整校验的安全报告；转折点移动时在其上做增量更新
+    private lastReport: RouteSafetyReport | null = null;
+    // 当前航线来源（'panel' | 'device'），随 route.entries 一并广播供面板过滤
+    private routeSource: 'panel' | 'device' = 'panel';
     // obstacle field version the cache was built against
     private cachedFieldVersion = '';
     // when true, surface clicks don't create new markers; waypoint dragging is enabled
@@ -226,6 +270,11 @@ class SamplePointTool {
                         newPos = this.snapWaypoint(this.selectedMarker, this.dragStartPos);
                         // re-plan the route (legs may need a new detour)
                         this.updateRouteLine();
+                        events.fire('waypoint.moved', this.selectedMarker, newPos.clone());
+                    } else if (this.selectedMarker.name === 'turnpoint') {
+                        // 转折点：用户显式放置的结果，不做安全吸附、不自动再绕行；
+                        // 只重画航线并重测与它相连的航段，不走完整校验管线
+                        this.updateForTurnMove(this.selectedMarker);
                         events.fire('waypoint.moved', this.selectedMarker, newPos.clone());
                     } else {
                         // do() re-applies the position the gizmo already set
@@ -400,10 +449,24 @@ class SamplePointTool {
         });
 
         // a waypoint was moved with WASD; re-plan the route around the new
-        // position (same handling as a gizmo drag)
+        // position (same handling as a gizmo drag). 转折点走轻量路径：只更新
+        // 与它相连的航段，不触发完整校验
         events.on('route.redraw.request', (marker: Entity, position: Vec3) => {
-            this.updateRouteLine();
+            if (marker.name === 'turnpoint') {
+                this.updateForTurnMove(marker);
+            } else {
+                this.updateRouteLine();
+            }
             events.fire('waypoint.moved', marker, position);
+        });
+
+        // 供 UI 面板把场景坐标转成 WGS84（转折点没有采样点，列表行只能
+        // 从实体位置现算）——复用工具现有的 sceneToWgs84 转换链
+        events.function('route.toWgs84', (pos: Vec3) => this.sceneToWgs84(pos));
+
+        // 航点列表点击转折点行：选中该转折点（挂 gizmo，编辑面板进入仅位置模式）
+        events.on('route.entry.select', (marker: Entity) => {
+            this.selectMarker(marker);
         });
 
         // export the waypoint list (lon/lat/alt) to the console (panel button)
@@ -466,11 +529,57 @@ class SamplePointTool {
         return entity;
     }
 
+    // build a turn point sphere entity (not yet added to the scene): smaller
+    // than a photo waypoint (60% radius) and orange so the two read apart
+    private makeTurnPointEntity(position: Vec3): Entity {
+        const { scene } = this;
+
+        // 拍照航点小球半径的 80%（同一套场景尺度逻辑），颜色与拍照航点一致
+        const sceneRadius = scene.bound.halfExtents.length();
+        const radius = Math.max(sceneRadius * 0.002 / 3, 0.0005 / 3) * 0.8;
+
+        const entity = new Entity('turnpoint');
+        entity.addComponent('render', { type: 'sphere' });
+
+        const material = new StandardMaterial();
+        const color = levelColor(SafetyLevel.safe);
+        material.diffuse = color;
+        material.emissive = color;
+        material.metalness = 0;
+        material.update();
+
+        entity.render.meshInstances[0].material = material;
+        entity.render.layers = [scene.worldLayer.id];
+
+        const s = radius * 2;
+        entity.setLocalScale(s, s, s);
+        entity.setLocalPosition(position);
+
+        return entity;
+    }
+
+    // 转折点的休止色：与拍照航点同一套安全分级配色（正常蓝、危险红），
+    // 视觉上只靠更小的尺寸区分类型
+    private turnColor(level: SafetyLevel): Color {
+        return levelColor(level);
+    }
+
+    // set a turn point marker's colour from its measured safety level
+    private applyTurnLevel(marker: Entity, level: SafetyLevel) {
+        this.markerLevels.set(marker, level);
+        if (!marker.render) return;
+        const material = marker.render.meshInstances[0].material as StandardMaterial;
+        const color = this.turnColor(level);
+        material.diffuse = color;
+        material.emissive = color;
+        material.update();
+    }
+
     // highlight a marker: sky blue for waypoints, orange for sample points
     private highlightMarker(marker: Entity) {
         if (!marker.render) return;
         const material = marker.render.meshInstances[0].material as StandardMaterial;
-        const isWaypoint = marker.name === 'waypoint';
+        const isWaypoint = marker.name === 'waypoint' || marker.name === 'turnpoint';
         const color = isWaypoint ? new Color(0, 0.8, 1) : new Color(1, 0.5, 0);
         material.diffuse = color;
         material.emissive = color;
@@ -479,14 +588,18 @@ class SamplePointTool {
     }
 
     // unhighlight a marker: restore its base color (yellow for sample points,
-    // safety-graded blue/amber/red for waypoints)
+    // safety-graded blue/amber/red for waypoints, orange/red for turn points)
     private unhighlightMarker(marker: Entity) {
         if (!marker.render) return;
         const material = marker.render.meshInstances[0].material as StandardMaterial;
-        const isWaypoint = marker.name === 'waypoint';
-        const restore = isWaypoint ?
-            levelColor(this.markerLevels.get(marker) ?? SafetyLevel.unknown) :
-            new Color(1, 1, 0);
+        let restore: Color;
+        if (marker.name === 'turnpoint') {
+            restore = this.turnColor(this.markerLevels.get(marker) ?? SafetyLevel.unknown);
+        } else if (marker.name === 'waypoint') {
+            restore = levelColor(this.markerLevels.get(marker) ?? SafetyLevel.unknown);
+        } else {
+            restore = new Color(1, 1, 0);
+        }
         material.diffuse = restore;
         material.emissive = restore;
         material.update();
@@ -618,24 +731,32 @@ class SamplePointTool {
             return;
         }
 
-        // live marker positions keyed by entity (drag-aware)
+        // live marker positions keyed by entity (drag-aware); 拍照航点与转折点
+        // 都取实体实时位置
         const live = new Map<Entity, Vec3>();
-        for (const wp of this.waypointPositions()) {
-            live.set(wp.entity, wp.position);
+        for (const entry of this.routeEntries) {
+            live.set(entry.entity, entry.entity.getLocalPosition().clone());
         }
 
-        const rows = waypoints.map((wp, i) => {
+        const rows: ExportRow[] = waypoints.map((wp, i) => {
             const position = live.get(wp.markerEntity) ?? wp.position;
             const wgs84 = this.sceneToWgs84(position);
-            const gimbal = this.cameraRig.getExportData(wp.markerEntity);
+            const coord = {
+                lon: wgs84 ? +wgs84.lon.toFixed(8) : null,
+                lat: wgs84 ? +wgs84.lat.toFixed(8) : null,
+                alt: wgs84 ? +wgs84.alt.toFixed(3) : null
+            };
+            if (wp.markerEntity.name === 'turnpoint') {
+                // 转折点：仅位置信息，无云台姿态/拍摄任务
+                return { index: i + 1, name: wp.name, kind: 'turn', ...coord };
+            }
             return {
                 index: i + 1,
                 name: wp.name,
-                lon: wgs84 ? +wgs84.lon.toFixed(8) : null,
-                lat: wgs84 ? +wgs84.lat.toFixed(8) : null,
-                alt: wgs84 ? +wgs84.alt.toFixed(3) : null,
+                kind: 'shot',
+                ...coord,
                 // gimbal attitude + distances (PRD P1)
-                gimbal
+                gimbal: this.cameraRig.getExportData(wp.markerEntity)
             };
         });
 
@@ -645,8 +766,11 @@ class SamplePointTool {
             const coord = row.lon === null
                 ? '无地理元数据（场景坐标不可导出 lon/lat/alt）'
                 : `lon=${row.lon}, lat=${row.lat}, alt=${row.alt}`;
+            const detail = row.kind === 'turn'
+                ? '转折点（无云台任务）'
+                : `yaw(相对航线)=${row.gimbal.yaw}° pitch=${row.gimbal.pitch}° focal=${row.gimbal.focal}mm | 对地=${row.gimbal.groundDist}m 拍摄=${row.gimbal.shootDist}m`;
             // eslint-disable-next-line no-console
-            console.log(`[Waypoint] ${row.name}: ${coord} | yaw(相对航线)=${row.gimbal.yaw}° pitch=${row.gimbal.pitch}° focal=${row.gimbal.focal}mm | 对地=${row.gimbal.groundDist}m 拍摄=${row.gimbal.shootDist}m`);
+            console.log(`[Waypoint] ${row.name}: ${coord} | ${detail}`);
         }
         // eslint-disable-next-line no-console
         console.log('[Waypoint] export:', rows);
@@ -706,10 +830,11 @@ class SamplePointTool {
             }
         }
 
-        // check waypoints
+        // check waypoints (photo waypoints + turn points)
         if (this.routeEntity) {
             for (const child of this.routeEntity.children) {
-                if ((child as Entity).name === 'waypoint') {
+                const name = (child as Entity).name;
+                if (name === 'waypoint' || name === 'turnpoint') {
                     check(child as Entity);
                 }
             }
@@ -734,9 +859,13 @@ class SamplePointTool {
         this.cameraRig.routeCleared();
         this.markerLevels.clear();
         this.legCache.clear();
+        // 转折点条目随 routeEntity 一并销毁，扁平条目序列同步清空
+        this.routeEntries = [];
+        this.legKeys = [];
         this.overlay.clear();
         this.debugPoints = null;
         this.debugNormals = null;
+        this.lastReport = null;
         if (this.routeEntity) {
             this.routeEntity.destroy();
             this.routeEntity = null;
@@ -745,19 +874,133 @@ class SamplePointTool {
         this.scene.forceRender = true;
     }
 
-    // ordered list of the waypoints currently in the route
-    private waypointPositions(): { entity: Entity; position: Vec3 }[] {
-        const result: { entity: Entity; position: Vec3 }[] = [];
-        if (!this.routeEntity) return result;
-        for (const child of this.routeEntity.children) {
-            if ((child as Entity).name === 'waypoint') {
-                result.push({
-                    entity: child as Entity,
-                    position: (child as Entity).getLocalPosition().clone()
-                });
+    // 按航线顺序取当前全部条目（拍照航点 + 转折点），位置为实体实时位置
+    private currentEntries(): { kind: 'shot' | 'turn'; entity: Entity; position: Vec3 }[] {
+        return this.routeEntries.map((entry) => ({
+            kind: entry.kind,
+            entity: entry.entity,
+            position: entry.entity.getLocalPosition().clone()
+        }));
+    }
+
+    // leg 端点键（与 getLegPlan 的缓存键同一格式）
+    private legKeyOf(a: Vec3, b: Vec3): string {
+        return `${a.x.toFixed(3)},${a.y.toFixed(3)},${a.z.toFixed(3)}|${b.x.toFixed(3)},${b.y.toFixed(3)},${b.z.toFixed(3)}`;
+    }
+
+    // 绕行折线（a → detour → b）中方向显著变化的内部顶点：与前后方向夹角
+    // 超过阈值才保留为转折点，纯直行的 cell 顶点丢弃（画线几乎不变形）
+    private significantTurns(a: Vec3, detour: Vec3[], b: Vec3): Vec3[] {
+        const pts = [a, ...detour, b];
+        const out: Vec3[] = [];
+        for (let i = 1; i < pts.length - 1; i++) {
+            const d1 = new Vec3().sub2(pts[i], pts[i - 1]);
+            const d2 = new Vec3().sub2(pts[i + 1], pts[i]);
+            if (d1.lengthSq() < 1e-12 || d2.lengthSq() < 1e-12) continue;
+            d1.normalize();
+            d2.normalize();
+            const angle = Math.acos(Math.min(1, Math.max(-1, d1.dot(d2)))) * 180 / Math.PI;
+            if (angle > TURN_ANGLE_THRESHOLD) {
+                out.push(pts[i].clone());
             }
         }
-        return result;
+        return out;
+    }
+
+    // 逐拍照航段规划并把显著转折顶点同步为转折点条目（与拍照航点按序混排）。
+    // 返回条目集合是否发生了可见变化（创建/销毁/移动）。
+    // 端点没动的航段直接跳过规划：拖动转折点后的重新校验因此不会把用户
+    // 放置的位置覆盖回规划结果（重绕行只发生在拍照航点被拖动之后）。
+    private reconcileTurnPoints(): boolean {
+        const shots = this.routeEntries.filter(e => e.kind === 'shot');
+
+        // 按拍照航点分段收集现有转折条目（尾部游离转折点按约定不应存在，销毁兜底）
+        const oldsPerLeg: RouteEntry[][] = [];
+        let pending: RouteEntry[] = [];
+        for (const entry of this.routeEntries) {
+            if (entry.kind === 'shot') {
+                oldsPerLeg.push(pending);
+                pending = [];
+            } else {
+                pending.push(entry);
+            }
+        }
+        for (const stale of pending) {
+            stale.entity.destroy();
+        }
+
+        const rebuilt: RouteEntry[] = [];
+        let changed = false;
+        for (let li = 0; li < shots.length; li++) {
+            rebuilt.push(shots[li]);
+            if (li === shots.length - 1) break;
+
+            const a = shots[li].entity.getLocalPosition();
+            const b = shots[li + 1].entity.getLocalPosition();
+            const key = this.legKeyOf(a, b);
+            const olds = oldsPerLeg[li] ?? [];
+
+            if (this.legKeys[li] === key) {
+                // 该航段端点未动：保留现有转折条目（含用户拖动后的位置）
+                for (const old of olds) rebuilt.push(old);
+                continue;
+            }
+            this.legKeys[li] = key;
+
+            // 拍照航点被拖动后重新 planLeg：新 detour 的转折点替换旧转折条目
+            const plan = this.getLegPlan(a, b);
+            const desired = plan.detour && plan.detour.length > 0
+                ? this.significantTurns(a, plan.detour, b)
+                : [];
+
+            if (olds.length === desired.length && desired.length > 0) {
+                // 数量一致：原地复用实体并更新位置，保持选中态/材质等身份
+                for (let k = 0; k < desired.length; k++) {
+                    const entry = olds[k];
+                    if (!entry.entity.getLocalPosition().equals(desired[k])) {
+                        changed = true;
+                    }
+                    entry.entity.setLocalPosition(desired[k]);
+                    rebuilt.push(entry);
+                }
+            } else {
+                // 数量变化：销毁重建，保持段内顺序
+                for (const old of olds) {
+                    old.entity.destroy();
+                    changed = true;
+                }
+                for (const p of desired) {
+                    const entity = this.makeTurnPointEntity(p);
+                    this.routeEntity!.addChild(entity);
+                    rebuilt.push({ kind: 'turn', entity });
+                    changed = true;
+                }
+            }
+        }
+
+        this.routeEntries = rebuilt;
+
+        // 兜底清扫：routeEntity 下任何不在此序列里的转折点实体都是孤儿
+        // （拖动重规划等任何路径导致序列与实体脱节时，旧小球会残留在场景
+        // 里且无人销毁），统一销毁，保证场景与条目序列最终一致
+        const tracked = new Set(this.routeEntries.map((e) => e.entity));
+        for (const child of [...this.routeEntity!.children]) {
+            if (child.name === 'turnpoint' && !tracked.has(child as Entity)) {
+                (child as Entity).destroy();
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    // 把当前条目序列（含转折点）按序广播给面板，供其重建航点列表行
+    private fireRouteEntries() {
+        const data: RouteEntryData[] = this.routeEntries.map((entry) => ({
+            marker: entry.entity,
+            kind: entry.kind,
+            position: entry.entity.getLocalPosition().clone()
+        }));
+        this.events.fire('route.entries', data, this.routeSource);
     }
 
     // ── device bounding box (device ledger panel) ──
@@ -926,7 +1169,7 @@ class SamplePointTool {
     // cached leg lookup — this is what keeps dragging responsive: only the two
     // legs touching the moved waypoint miss the cache
     private getLegPlan(a: Vec3, b: Vec3): LegPlan {
-        const key = `${a.x.toFixed(3)},${a.y.toFixed(3)},${a.z.toFixed(3)}|${b.x.toFixed(3)},${b.y.toFixed(3)},${b.z.toFixed(3)}`;
+        const key = this.legKeyOf(a, b);
 
         const cached = this.legCache.get(key);
         if (cached) return cached;
@@ -954,8 +1197,10 @@ class SamplePointTool {
         this.updateRoute();
     }
 
-    // Plan the legs between waypoints (P2), then measure and draw everything.
-    // Waypoint positions are only changed by explicit snapping, never here.
+    // Plan the legs between the photo waypoints (P2), promote the significant
+    // detour vertices to turn point entries, then measure and draw everything
+    // along the flat entry sequence. Waypoint positions are only changed by
+    // explicit snapping, never here.
     private async updateRoute() {
         if (this.validating) {
             this.validationQueued = true;
@@ -966,17 +1211,17 @@ class SamplePointTool {
         try {
             const ready = await this.clearance.ensureBuilt(this.scene);
 
-            // a rebuilt obstacle field invalidates every cached leg
+            // a rebuilt obstacle field invalidates every cached leg — and every
+            // leg key, so all legs re-plan and the turn points follow the new
+            // detours (unchanged endpoints would otherwise keep stale detours)
             if (this.clearance.version !== this.cachedFieldVersion) {
                 this.cachedFieldVersion = this.clearance.version;
                 this.legCache.clear();
+                this.legKeys = [];
             }
 
             // the route may have been cleared while the field was building
             if (!this.routeEntity) return;
-
-            const waypoints = this.waypointPositions();
-            if (waypoints.length === 0) return;
 
             const report: RouteSafetyReport = {
                 ready,
@@ -988,49 +1233,78 @@ class SamplePointTool {
             };
 
             if (!ready) {
-                // nothing measurable — tell the panel the measurement is unavailable
-                for (const wp of waypoints) {
-                    report.waypoints.push({ entity: wp.entity, clearance: -1, level: SafetyLevel.unknown });
+                // nothing measurable — keep the existing entries (they are part
+                // of the flat route) and tell the panel the measurement is
+                // unavailable
+                const entries = this.currentEntries();
+                if (entries.length === 0) return;
+                for (const entry of entries) {
+                    report.waypoints.push({ entity: entry.entity, clearance: -1, level: SafetyLevel.unknown });
                 }
-                this.drawRoute(waypoints.map(w => w.position));
-                this.overlay.drawDistanceIndicators(waypoints, report);
+                this.drawRoute(entries.map(e => e.position));
+                this.overlay.drawDistanceIndicators(entries, report);
+                this.fireRouteEntries();
+                this.lastReport = report;
                 this.events.fire('route.validated', report);
                 return;
             }
 
-            for (const wp of waypoints) {
-                const clearance = this.clearance.clearance(wp.position);
+            // plan each photo leg and sync its significant detour vertices as
+            // turn point entries (results are cached by endpoints, so moving
+            // one waypoint only re-plans the legs that actually changed)
+            this.reconcileTurnPoints();
+
+            // the route may have had no solvable waypoints at all
+            const entries = this.currentEntries();
+            if (entries.length === 0) return;
+
+            // 每个条目（拍照航点 + 转折点）单独量测净空并着色
+            for (const entry of entries) {
+                const clearance = this.clearance.clearance(entry.position);
                 const level = this.clearance.level(clearance);
-                this.applyMarkerLevel(wp.entity, level);
-                report.waypoints.push({ entity: wp.entity, clearance, level });
+                if (entry.kind === 'turn') {
+                    this.applyTurnLevel(entry.entity, level);
+                } else {
+                    this.applyMarkerLevel(entry.entity, level);
+                }
+                report.waypoints.push({ entity: entry.entity, clearance, level });
             }
 
-            // plan each leg; the polyline we draw follows the safe path.
-            // results are cached by endpoints, so moving one waypoint only
-            // re-plans the two legs that actually changed
-            const path: Vec3[] = [];
-            for (let i = 0; i < waypoints.length; i++) {
-                const a = waypoints[i].position;
-                path.push(a.clone());
-
-                if (i === waypoints.length - 1) break;
-
-                const b = waypoints[i + 1].position;
-                const plan = this.getLegPlan(a, b);
-
-                if (plan.detour) {
-                    for (const p of plan.detour) {
-                        path.push(p.clone());
+            // 相邻条目间的直线段逐一量测；每个拍照航段（两个拍照航点之间）
+            // 的 report.segments 记录取其子段最小净空（结构与原实现一致）。
+            // 画线路径 = 全部条目位置依次连线（转折点即绕行路径的骨架）
+            const path: Vec3[] = entries.map(e => e.position.clone());
+            let legIndex = -1;
+            let legMin = Infinity;
+            const legPoint = new Vec3();
+            for (let i = 0; i < entries.length - 1; i++) {
+                if (entries[i].kind === 'shot') {
+                    // 遇到拍照航点：闭合上一拍照航段
+                    if (legIndex >= 0) {
+                        report.segments.push({
+                            index: legIndex,
+                            clearance: legMin === Infinity ? -1 : legMin,
+                            level: this.clearance.level(legMin === Infinity ? -1 : legMin),
+                            point: legPoint.clone()
+                        });
                     }
+                    legIndex++;
+                    legMin = Infinity;
+                    legPoint.copy(entries[i].position);
                 }
-
-                // legs carry their measured level: a leg whose detour search
-                // failed keeps the straight line and now shows up as danger
+                const result = this.clearance.segmentMinClearance(entries[i].position, entries[i + 1].position);
+                if (result.clearance >= 0 && result.clearance < legMin) {
+                    legMin = result.clearance;
+                    legPoint.copy(result.point);
+                }
+            }
+            // 闭合最后一个拍照航段
+            if (legIndex >= 0) {
                 report.segments.push({
-                    index: i,
-                    clearance: plan.clearance,
-                    level: this.clearance.level(plan.clearance),
-                    point: plan.point.clone()
+                    index: legIndex,
+                    clearance: legMin === Infinity ? -1 : legMin,
+                    level: this.clearance.level(legMin === Infinity ? -1 : legMin),
+                    point: legPoint.clone()
                 });
             }
 
@@ -1043,8 +1317,10 @@ class SamplePointTool {
             report.dangerCount = report.waypoints.filter(x => x.level === SafetyLevel.danger).length;
 
             this.drawRoute(path);
-            this.overlay.drawDistanceIndicators(waypoints, report);
+            this.overlay.drawDistanceIndicators(entries, report);
             this.scene.forceRender = true;
+            this.fireRouteEntries();
+            this.lastReport = report;
             this.events.fire('route.validated', report);
         } finally {
             this.validating = false;
@@ -1060,11 +1336,83 @@ class SamplePointTool {
         this.overlay.setRoute(path);
     }
 
-    // redraw the route from the current waypoint positions and re-plan it
+    // redraw the route from the current entry positions (含转折点) and re-plan it
     private updateRouteLine() {
-        this.drawRoute(this.waypointPositions().map(w => w.position));
+        this.drawRoute(this.routeEntries.map(e => e.entity.getLocalPosition().clone()));
         this.scene.forceRender = true;
         this.scheduleValidation();
+    }
+
+    // 转折点移动后的轻量更新：重画航线（管线网格重建，开销小、不动任何
+    // 条目），并只重测与该转折点相连的航段——它始终夹在两个拍照航点之间，
+    // 即所属拍照航段的全部子段；其余航段沿用上次完整校验的结果。不重新
+    // 规划、不重建条目、不整体重测
+    private updateForTurnMove(turn: Entity) {
+        const idx = this.routeEntries.findIndex((e) => e.entity === turn);
+        const entries = this.currentEntries();
+        if (idx < 0 || entries.length === 0) {
+            this.updateRouteLine();
+            return;
+        }
+        this.drawRoute(entries.map((e) => e.position.clone()));
+        this.scene.forceRender = true;
+
+        const report = this.lastReport;
+        if (!report || !report.ready || report.waypoints.length !== entries.length) {
+            // 没有可增量更新的报告（尚未完成过完整校验）：退回完整校验
+            this.scheduleValidation();
+            return;
+        }
+
+        // 转折点自身净空
+        const own = this.clearance.clearance(entries[idx].position);
+        const ownLevel = this.clearance.level(own);
+        this.applyTurnLevel(turn, ownLevel);
+        report.waypoints[idx] = { entity: turn, clearance: own, level: ownLevel };
+
+        // 所属拍照航段：前后最近的拍照航点之间的全部子段重测取最小
+        let prevShot = -1;
+        for (let i = idx - 1; i >= 0; i--) {
+            if (entries[i].kind === 'shot') { prevShot = i; break; }
+        }
+        let nextShot = -1;
+        for (let i = idx + 1; i < entries.length; i++) {
+            if (entries[i].kind === 'shot') { nextShot = i; break; }
+        }
+        if (prevShot >= 0 && nextShot >= 0) {
+            // 航段序号 = 该拍照航点之前已有的拍照航段数
+            let legIndex = 0;
+            for (let i = 0; i < prevShot; i++) {
+                if (entries[i].kind === 'shot') legIndex++;
+            }
+            let legMin = Infinity;
+            const legPoint = new Vec3();
+            for (let i = prevShot; i < nextShot; i++) {
+                const result = this.clearance.segmentMinClearance(entries[i].position, entries[i + 1].position);
+                if (result.clearance >= 0 && result.clearance < legMin) {
+                    legMin = result.clearance;
+                    legPoint.copy(result.point);
+                }
+            }
+            report.segments[legIndex] = {
+                index: legIndex,
+                clearance: legMin === Infinity ? -1 : legMin,
+                level: this.clearance.level(legMin === Infinity ? -1 : legMin),
+                point: legPoint.clone()
+            };
+        }
+
+        // 汇总指标与距离指示线刷新（指示线绘制便宜，全量重画保持一致）
+        const measured = [
+            ...report.waypoints.map((w) => w.clearance),
+            ...report.segments.map((s) => s.clearance)
+        ].filter((c) => c >= 0);
+        report.minClearance = measured.length ? Math.min(...measured) : -1;
+        report.dangerCount = report.waypoints.filter((w) => w.level === SafetyLevel.danger).length;
+
+        this.overlay.drawDistanceIndicators(entries, report);
+        this.fireRouteEntries();
+        this.events.fire('route.validated', report);
     }
 
     // Generate waypoints from sample points.
@@ -1082,6 +1430,9 @@ class SamplePointTool {
 
         // the tool or scene may have gone away while the field was building
         if (!this.root) return;
+
+        // 当前航线来源随 route.generated / route.entries 广播，面板据此过滤
+        this.routeSource = source;
 
         const routeEntity = new Entity('sampleRoute');
 
@@ -1135,6 +1486,8 @@ class SamplePointTool {
             wp.setLocalScale(wpScale, wpScale, wpScale);
             wp.setLocalPosition(hoverPos);
             routeEntity.addChild(wp);
+            // 扁平条目序列：拍照航点按生成顺序入列，转折点由校验阶段插入
+            this.routeEntries.push({ kind: 'shot', entity: wp });
 
             // initial gimbal aim: from the hover point towards the sampled
             // surface point (the subject the waypoint is supposed to shoot)

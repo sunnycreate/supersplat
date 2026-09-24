@@ -276,11 +276,25 @@ class WaypointCameraRig {
     // ── selection (called by the sample point tool) ──
 
     select(marker: Entity) {
-        if (marker.name !== 'waypoint') {
+        if (marker.name !== 'waypoint' && marker.name !== 'turnpoint') {
             this.deselect();
             return;
         }
         this.selected = marker;
+        if (marker.name === 'turnpoint') {
+            // 转折点没有云台任务：不写 attitudes map、不建视锥/画中画/subject
+            // 黄线，只回报位置与对地距离（kind: 'turn' 让编辑面板进入仅位置模式）
+            this.hideSelectionVisuals();
+            const position = marker.getLocalPosition();
+            this.events.fire('waypointAttitude.selected', {
+                marker,
+                position: position.clone(),
+                groundDist: +this.groundDist(position).toFixed(3),
+                kind: 'turn' as const
+            });
+            this.scene.forceRender = true;
+            return;
+        }
         if (!this.attitudes.has(marker)) {
             this.attitudes.set(marker, { yaw: 0, pitch: -30, focal: FOCAL_DEFAULT });
         }
@@ -298,6 +312,15 @@ class WaypointCameraRig {
     deselect() {
         if (!this.selected) return;
         this.selected = null;
+        this.hideSelectionVisuals();
+        // payload shape must match 'fireSelected': listeners read data.marker
+        this.events.fire('waypointAttitude.selected', { marker: null });
+        this.scene.forceRender = true;
+    }
+
+    // hide the previous selection's frustum / pip / preview UI without touching
+    // the selected marker itself（选中转折点或取消选中时都要走这里）
+    private hideSelectionVisuals() {
         this.endMove();
         if (this.frustumEntity) {
             this.frustumEntity.enabled = false;
@@ -306,9 +329,6 @@ class WaypointCameraRig {
             this.scene.app.root.removeChild(this.pipEntity);
         }
         this.events.fire('cameraPreview.visible', false);
-        // payload shape must match 'fireSelected': listeners read data.marker
-        this.events.fire('waypointAttitude.selected', { marker: null });
-        this.scene.forceRender = true;
     }
 
     // the whole route was destroyed
@@ -460,6 +480,8 @@ class WaypointCameraRig {
         const position = marker.getLocalPosition();
         return {
             marker,
+            // 拍照航点载荷标记类型；转折点走 fireUpdated 里的专用载荷
+            kind: 'shot' as const,
             attitude: attitude ? { ...attitude } : null,
             // panel-facing relative yaw (body frame); the attitude.yaw above
             // stays in the world frame for rendering
@@ -474,6 +496,17 @@ class WaypointCameraRig {
     }
 
     private fireUpdated(marker: Entity) {
+        if (marker.name === 'turnpoint') {
+            // 转折点没有云台姿态：updated 载荷只带位置与对地距离
+            const position = marker.getLocalPosition();
+            this.events.fire('waypointAttitude.updated', {
+                marker,
+                position: position.clone(),
+                groundDist: +this.groundDist(position).toFixed(3),
+                kind: 'turn' as const
+            });
+            return;
+        }
         this.events.fire('waypointAttitude.updated', this.firePayload(marker));
     }
 

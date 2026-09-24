@@ -28,6 +28,8 @@ interface WaypointEntry {
     name: string;
     position: Vec3;
     markerEntity: Entity;
+    // 拍照点带拍摄任务（净空条/相机信息）；转折点仅位置
+    kind: 'shot' | 'turn';
     // measured distance to the closest obstacle (-1 = not measured)
     clearance: number;
     level: SafetyLevel;
@@ -145,15 +147,28 @@ class WaypointList extends Container {
         tooltips.register(this.distBtn, () => '显示/隐藏最短安全距离指示线', 'left');
     }
 
-    // replace the waypoint rows
+    // replace the waypoint rows（route.generated 后的即时拍照行填充，
+    // 完整条目含转折点的重建走 setEntries）
     setWaypoints(wps: { name: string; position: Vec3; markerEntity: Entity }[]) {
+        this.setEntries(wps.map((wp) => ({
+            marker: wp.markerEntity,
+            kind: 'shot' as const,
+            position: wp.position,
+            name: wp.name
+        })));
+    }
+
+    // replace the rows from the ordered route entries（含转折点，与拍照航点
+    // 按航线顺序混排；由 route.entries 驱动）
+    setEntries(entries: { marker: Entity; kind: 'shot' | 'turn'; position: Vec3; name: string }[]) {
         this.clear();
 
-        for (const wp of wps) {
+        for (const wp of entries) {
             const entry: WaypointEntry = {
                 name: wp.name,
                 position: wp.position,
-                markerEntity: wp.markerEntity,
+                markerEntity: wp.marker,
+                kind: wp.kind,
                 clearance: -1,
                 level: SafetyLevel.unknown
             };
@@ -164,31 +179,49 @@ class WaypointList extends Container {
                 class: 'sample-point-name',
                 text: wp.name
             });
-            const bar = this.makeClearanceBar();
-            const clearance = new Label({
-                class: 'sample-wp-clearance',
-                text: this.clearanceText(entry.clearance)
-            });
             row.append(name);
-            row.append(bar.root);
-            row.append(clearance);
+
+            if (wp.kind === 'shot') {
+                // 拍照行保持现状：净空条 + 净空读数
+                const bar = this.makeClearanceBar();
+                const clearance = new Label({
+                    class: 'sample-wp-clearance',
+                    text: this.clearanceText(entry.clearance)
+                });
+                row.append(bar.root);
+                row.append(clearance);
+                this.clearanceLabels.set(wp.marker, clearance);
+                this.bars.set(wp.marker, bar);
+            } else {
+                // 转折点行：仅标签 + 坐标，无相机信息列、无删除按钮。
+                // 转折点没有采样点，lat/lon 只能从实体位置经工具现有的
+                // WGS84 转换入口现算（route.toWgs84 由采样点工具注册）
+                const wgs84 = this.events.invoke('route.toWgs84', wp.position) as { lat: number; lon: number; alt: number } | null | undefined;
+                const info = new Label({
+                    class: 'sample-wp-clearance',
+                    text: wgs84
+                        ? `lat:${wgs84.lat.toFixed(4)}, lon:${wgs84.lon.toFixed(4)}, alt:${wgs84.alt.toFixed(1)}`
+                        : `(${wp.position.x.toFixed(1)}, ${wp.position.y.toFixed(1)}, ${wp.position.z.toFixed(1)})`
+                });
+                row.append(info);
+            }
             this.listBody.append(row);
 
-            this.rows.set(wp.markerEntity, row);
-            this.clearanceLabels.set(wp.markerEntity, clearance);
-            this.bars.set(wp.markerEntity, bar);
+            this.rows.set(wp.marker, row);
 
             // hover to highlight the waypoint
             row.dom.addEventListener('pointerenter', () => {
-                this.events.fire('samplePoint.highlight', { marker: wp.markerEntity, name: wp.name });
+                this.events.fire('samplePoint.highlight', { marker: wp.marker, name: wp.name });
             });
             row.dom.addEventListener('pointerleave', () => {
-                this.events.fire('samplePoint.unhighlight', { marker: wp.markerEntity });
+                this.events.fire('samplePoint.unhighlight', { marker: wp.marker });
             });
 
-            // click to fly the camera to this waypoint
+            // click: fly the camera to this waypoint，并选中它（拍照点完整编辑
+            // 面板 + gizmo，转折点仅位置模式 + gizmo）
             row.dom.addEventListener('click', () => {
-                this.events.fire('samplePoint.focus', wp.markerEntity);
+                this.events.fire('samplePoint.focus', wp.marker);
+                this.events.fire('route.entry.select', wp.marker);
             });
         }
     }

@@ -43,6 +43,11 @@ class WaypointEditPanel extends Container {
     private groundDistLabel: Label;
     private shootDistLabel: Label;
 
+    // yaw/pitch/focal 滑条行（选中转折点时整体隐藏）
+    private sliderRows: Container[] = [];
+    // 转折点提示：仅可调整位置
+    private turnHint: Label;
+
     constructor(events: Events, tooltips: Tooltips, args = {}) {
         args = {
             ...args,
@@ -80,6 +85,14 @@ class WaypointEditPanel extends Container {
         header.append(label);
         this.append(header);
 
+        // 转折点提示（默认隐藏，选中转折点时替换云台编辑区显示）
+        this.turnHint = new Label({
+            class: 'wp-edit-info',
+            text: '转折点 · 仅可调整位置',
+            hidden: true
+        });
+        this.append(this.turnHint);
+
         // measured distances for the selected waypoint
         this.groundDistLabel = new Label({
             class: 'wp-edit-info',
@@ -99,6 +112,7 @@ class WaypointEditPanel extends Container {
             const row = new Container({
                 class: 'wp-edit-slider-row'
             });
+            this.sliderRows.push(row);
 
             row.append(new Label({
                 class: 'wp-edit-slider-name',
@@ -246,6 +260,8 @@ class WaypointEditPanel extends Container {
             }
 
             this.marker = data.marker;
+            // 转折点只保留位置编辑：云台/焦距滑条、拍摄距离全部隐藏
+            this.setTurnMode(data.kind === 'turn');
             this.applyAttitude(data.attitude);
             // this.yaw holds the RELATIVE gimbal yaw (panel semantics)
             this.yaw = data.relativeYaw ?? 0;
@@ -281,6 +297,16 @@ class WaypointEditPanel extends Container {
         }
         this.pitch = attitude.pitch;
         this.focal = attitude.focal;
+    }
+
+    // 转折点没有云台/焦距/拍摄任务：隐藏滑条与拍摄距离，只留对地距离、
+    // 位置提示和 WASD/箭头移动（拍照航点保持全部编辑能力）
+    private setTurnMode(turn: boolean) {
+        for (const row of this.sliderRows) {
+            row.hidden = turn;
+        }
+        this.shootDistLabel.hidden = turn;
+        this.turnHint.hidden = !turn;
     }
 
     // numeric labels next to the sliders (1 decimal place + unit)

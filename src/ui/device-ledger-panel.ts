@@ -185,6 +185,20 @@ class DeviceLedgerPanel extends Container {
             })));
         });
 
+        // ── 条目集合（含转折点）按序广播后重建航点列表行 ──
+        // 转折点没有采样点与拍摄任务：只显示名称与坐标，行可点击选中
+        events.on('route.entries', (entries: { marker: Entity; kind: 'shot' | 'turn'; position: Vec3 }[], source: string) => {
+            if (source !== 'device') return;
+
+            let shotCounter = 0;
+            let turnCounter = 0;
+            const list = this.ensureWaypointList();
+            list.setEntries(entries.map((e) => e.kind === 'shot'
+                ? { marker: e.marker, kind: e.kind, position: e.position, name: `WP ${++shotCounter}` }
+                : { marker: e.marker, kind: e.kind, position: e.position, name: `转折点 ${++turnCounter}` }
+            ));
+        });
+
         events.on('route.validated', (report: RouteSafetyReport) => {
             this.waypointList?.applySafetyReport(report);
         });

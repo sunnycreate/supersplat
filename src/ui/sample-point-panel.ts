@@ -256,6 +256,30 @@ class SamplePointPanel extends Container {
             this.addWaypointsToFolder(waypoints);
         });
 
+        // ── 条目集合（含转折点）按序广播后重建航点列表行 ──
+        // 拍照行名称沿用 folder.waypoints 的 WP 编号；转折点没有采样点，
+        // 按出现顺序编号，坐标由 WaypointList 经 route.toWgs84 现算
+        events.on('route.entries', (entries: { marker: Entity; kind: 'shot' | 'turn'; position: Vec3 }[], source: string) => {
+            if (source !== 'panel') return;
+            const folder = this.folders.find(f => f.routeActive);
+            if (!folder) return;
+
+            let turnCounter = 0;
+            const rows = entries.map((e) => {
+                if (e.kind === 'shot') {
+                    const wp = folder.waypoints.find(w => w.markerEntity === e.marker);
+                    return { marker: e.marker, kind: e.kind, position: e.position, name: wp ? wp.name : 'WP ?' };
+                }
+                return { marker: e.marker, kind: e.kind, position: e.position, name: `转折点 ${++turnCounter}` };
+            });
+
+            const list = this.ensureWaypointList(folder);
+            list.setEntries(rows);
+            if (this.safetyReport) {
+                list.applySafetyReport(this.safetyReport);
+            }
+        });
+
         // ── listen for the obstacle measurement of the route ──
         events.on('route.validated', (report: RouteSafetyReport) => {
             this.safetyReport = report;
