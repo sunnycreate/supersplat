@@ -7,7 +7,7 @@ import { Events } from '../events';
 import { ClearanceField, RouteSafetyReport } from '../route/clearance-field';
 import { makeLineMaterial, RouteOverlay } from '../route/route-overlay';
 import { planDetour, snapToSafe, solveHoverPoint } from '../route/route-planner';
-import { SafetyLevel, levelColor } from '../route/safety-config';
+import { SafetyLevel, hardClearance, levelColor } from '../route/safety-config';
 import { WaypointCameraRig } from '../route/waypoint-camera';
 import { Scene } from '../scene';
 import { Splat } from '../splat';
@@ -48,9 +48,6 @@ interface RouteEntryData {
     kind: 'shot' | 'turn';
     position: Vec3;
 }
-
-// 绕行顶点与前后方向夹角超过该阈值才保留为转折点（纯直行 cell 顶点丢弃）
-const TURN_ANGLE_THRESHOLD = 20; // deg
 
 // 航点导出行：kind 区分拍照点/转折点（新增字段，向后兼容）；转折点无云台字段
 type ExportRow = {
@@ -888,20 +885,22 @@ class SamplePointTool {
         return `${a.x.toFixed(3)},${a.y.toFixed(3)},${a.z.toFixed(3)}|${b.x.toFixed(3)},${b.y.toFixed(3)},${b.z.toFixed(3)}`;
     }
 
-    // 绕行折线（a → detour → b）中方向显著变化的内部顶点：与前后方向夹角
-    // 超过阈值才保留为转折点，纯直行的 cell 顶点丢弃（画线几乎不变形）
+    // 绕行折线（a → detour → b）的顶点精简：以净空为准则贪心合并——从起点
+    // 出发，只要"跳过当前顶点直连下一个顶点"的弦的实测净空低于硬性要求，
+    // 就必须保留当前顶点作为转折点。旧的"夹角>20°才保留"规则会把小角度
+    // 但必要的中继点/缓弯顶点丢掉，丢完后剩余直连弦直接切穿障碍——表现
+    // 为最小间距骤降、航线上看不出任何绕行
     private significantTurns(a: Vec3, detour: Vec3[], b: Vec3): Vec3[] {
         const pts = [a, ...detour, b];
+        if (pts.length <= 2) return [];
+        const hard = hardClearance(this.clearance.config);
         const out: Vec3[] = [];
+        let anchor = 0; // 最近一个保留顶点（或起点）的下标
         for (let i = 1; i < pts.length - 1; i++) {
-            const d1 = new Vec3().sub2(pts[i], pts[i - 1]);
-            const d2 = new Vec3().sub2(pts[i + 1], pts[i]);
-            if (d1.lengthSq() < 1e-12 || d2.lengthSq() < 1e-12) continue;
-            d1.normalize();
-            d2.normalize();
-            const angle = Math.acos(Math.min(1, Math.max(-1, d1.dot(d2)))) * 180 / Math.PI;
-            if (angle > TURN_ANGLE_THRESHOLD) {
+            const chord = this.clearance.segmentMinClearance(pts[anchor], pts[i + 1]);
+            if (chord.clearance < hard) {
                 out.push(pts[i].clone());
+                anchor = i;
             }
         }
         return out;
